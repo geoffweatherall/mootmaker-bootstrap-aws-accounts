@@ -1,11 +1,13 @@
 AWSTemplateFormatVersion: '2010-09-09'
 Description: >-
-  An AWS Budget that emails an alert on any non-trivial spend in the
+  An AWS Budget that emails an alert on any non-trivial spend directly in the
   Organizations management account. This account is deliberately meant to
   hold no workloads and no IAM users, so any recorded cost here at all is
   anomalous and worth investigating immediately - unlike the workload
   account's budgets, this isn't a cost-management concern, it's a security
-  signal. Deploy in the management account (339140804537). No IAM capability
+  signal. Scoped via a LinkedAccount cost filter to the management account's
+  own ID so consolidated-billing spend from member accounts doesn't trigger
+  it. Deploy in the management account (339140804537). No IAM capability
   needed.
 
 Parameters:
@@ -24,6 +26,9 @@ Resources:
         BudgetLimit:
           Amount: 0.01
           Unit: USD
+        CostFilters:
+          LinkedAccount:
+            - "339140804537"
       NotificationsWithSubscribers:
         - Notification:
             NotificationType: ACTUAL
