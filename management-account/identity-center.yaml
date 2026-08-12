@@ -63,7 +63,7 @@ Parameters:
 
   pAllowedServiceActions:
     Type: CommaDelimitedList
-    Default: "s3:*,dynamodb:*,lambda:*,appsync:*,cognito-idp:*,cloudfront:*,route53:*,acm:*,iam:*,sts:*,logs:*,cloudformation:*,budgets:*,ce:*,support:*,trustedadvisor:*,health:*,events:*,organizations:Describe*,organizations:List*"
+    Default: "s3:*,dynamodb:*,lambda:*,appsync:*,cognito-idp:*,cloudfront:*,route53:*,acm:*,iam:*,sts:*,logs:*,cloudwatch:*,cloudformation:*,budgets:*,ce:*,support:*,trustedadvisor:*,health:*,events:*,organizations:Describe*,organizations:List*"
     Description: >-
       Must match the service-allowlist SCP. Keep both in sync when adding a
       new service. route53/acm were already exempted from the region-lock

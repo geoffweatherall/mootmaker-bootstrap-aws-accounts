@@ -22,7 +22,7 @@ Parameters:
 
   pAllowedServiceActions:
     Type: CommaDelimitedList
-    Default: "s3:*,dynamodb:*,lambda:*,appsync:*,cognito-idp:*,cloudfront:*,route53:*,acm:*,iam:*,sts:*,logs:*,cloudformation:*,budgets:*,ce:*,support:*,trustedadvisor:*,health:*,events:*,organizations:Describe*,organizations:List*"
+    Default: "s3:*,dynamodb:*,lambda:*,appsync:*,cognito-idp:*,cloudfront:*,route53:*,acm:*,iam:*,sts:*,logs:*,cloudwatch:*,cloudformation:*,budgets:*,ce:*,support:*,trustedadvisor:*,health:*,events:*,organizations:Describe*,organizations:List*"
     Description: >-
       Service action prefixes member accounts are allowed to use. Anything
       not listed here is denied by omission, regardless of what any IAM

@@ -38,11 +38,12 @@ Two SCPs, both attached to the account IDs listed in `pTargetAccountIds`:
 
 Defaults are scoped to exactly what mootmaker-api/mootmaker-webapp/
 mootmaker-tools currently use: `s3, dynamodb, lambda, appsync, cognito-idp,
-cloudfront, iam, sts, logs`, plus `events` (EventBridge - schedules
-mootmaker-tools/sample-data-topup's weekly Lambda trigger), plus `budgets,
-ce, support, trustedadvisor, health` for account hygiene and a couple of
-`organizations:Describe*/List*` calls for basic self-service visibility
-from the member account.
+cloudfront, iam, sts, logs, cloudwatch` (the last for viewing metrics/alarms
+in the workspace account, e.g. CloudWatch Logs Insights / metric dashboards),
+plus `events` (EventBridge - schedules mootmaker-tools/sample-data-topup's
+weekly Lambda trigger), plus `budgets, ce, support, trustedadvisor, health`
+for account hygiene and a couple of `organizations:Describe*/List*` calls
+for basic self-service visibility from the member account.
 
 **Important:** none of this applies to the management account itself - SCPs
 never restrict the account they're managed from, only member accounts.
