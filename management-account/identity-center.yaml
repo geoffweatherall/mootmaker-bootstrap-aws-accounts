@@ -63,7 +63,7 @@ Parameters:
 
   pAllowedServiceActions:
     Type: CommaDelimitedList
-    Default: "s3:*,dynamodb:*,lambda:*,appsync:*,cognito-idp:*,cloudfront:*,route53:*,acm:*,iam:*,sts:*,logs:*,cloudwatch:*,cloudformation:*,budgets:*,ce:*,support:*,trustedadvisor:*,health:*,events:*,organizations:Describe*,organizations:List*"
+    Default: "s3:*,dynamodb:*,lambda:*,appsync:*,cognito-idp:*,cloudfront:*,route53:*,acm:*,iam:*,sts:*,logs:*,cloudwatch:*,cloudformation:*,budgets:*,ce:*,support:*,trustedadvisor:*,health:*,events:*,ses:*,sns:*,sqs:*,organizations:Describe*,organizations:List*"
     Description: >-
       Must match the service-allowlist SCP. Keep both in sync when adding a
       new service. route53/acm were already exempted from the region-lock
@@ -71,7 +71,11 @@ Parameters:
       never actually granted here - custom-domain deploys (mootmaker-webapp,
       mootmaker-api, mootmaker-domain) need route53:ListHostedZones,
       route53:ChangeResourceRecordSets, and the acm:*Certificate* actions to
-      manage their DNS records and TLS certificates.
+      manage their DNS records and TLS certificates. ses/sns/sqs (not
+      region-exempted below - they're regional, same as dynamodb/lambda/etc,
+      and this project only ever deploys them to us-east-1) back
+      mootmaker-e2e's real-email testing pipeline: an SES domain identity,
+      receipt rule set/rule, an SNS topic, and an SQS queue.
 
 Resources:
   AdminGroup:
