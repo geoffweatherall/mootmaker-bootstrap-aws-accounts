@@ -27,7 +27,10 @@ last IAM user in this account.
 ## Deploying
 
 Open CloudFormation in 431071856068, **Create stack** > upload the
-template. `credential-rotation.yaml` creates named IAM resources, so the
+template. Name the stack after the template filename (e.g.
+`credential-rotation`, `billing-alert`) - the convention this project uses
+for every stack, so it's obvious at a glance which template deployed which
+stack. `credential-rotation.yaml` creates named IAM resources, so the
 console will ask you to acknowledge **"I acknowledge that AWS
 CloudFormation might create IAM resources with custom names"**
 (`CAPABILITY_NAMED_IAM`) - that's expected. `billing-alert.yaml` needs no

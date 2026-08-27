@@ -36,14 +36,18 @@ Two SCPs, both attached to the account IDs listed in `pTargetAccountIds`:
   this is what blocks EC2 and everything else you don't use, without
   having to enumerate what to block.
 
-Defaults are scoped to exactly what mootmaker-api/mootmaker-webapp/
-mootmaker-tools currently use: `s3, dynamodb, lambda, appsync, cognito-idp,
+Defaults are scoped to exactly what the mootmaker-* projects deployed into
+member accounts currently use: `s3, dynamodb, lambda, appsync, cognito-idp,
 cloudfront, iam, sts, logs, cloudwatch` (the last for viewing metrics/alarms
 in the workspace account, e.g. CloudWatch Logs Insights / metric dashboards),
-plus `events` (EventBridge - schedules mootmaker-tools/sample-data-topup's
-weekly Lambda trigger), plus `budgets, ce, support, trustedadvisor, health`
-for account hygiene and a couple of `organizations:Describe*/List*` calls
-for basic self-service visibility from the member account.
+`cloudformation` (stack-based deploys), `route53, acm` (custom-domain setup
+for mootmaker-webapp/mootmaker-api/mootmaker-domain), plus `events`
+(EventBridge - schedules mootmaker-tools/sample-data-topup's weekly Lambda
+trigger), `ses, sns, sqs` (mootmaker-test-infra's real-email testing
+pipeline: SES receiving, SNS, SQS), plus `budgets, ce, support,
+trustedadvisor, health` for account hygiene and a couple of
+`organizations:Describe*/List*` calls for basic self-service visibility from
+the member account.
 
 **Important:** none of this applies to the management account itself - SCPs
 never restrict the account they're managed from, only member accounts.
@@ -57,6 +61,9 @@ member account's admin user even if their credentials leak.
    `AWS::Organizations::Policy` resources are global regardless of the
    stack's region).
 3. **Create stack** > **With new resources** > upload `scp-guardrails.yaml`.
+   Name the stack `scp-guardrails`, matching the template filename - the
+   convention this project uses for every stack here, so it's obvious at a
+   glance which template deployed which stack.
 4. Review the parameters - the default `pTargetAccountIds` already
    targets `431071856068`. Adjust `pAllowedRegions` /
    `pAllowedServiceActions` first if you want something different from
@@ -135,7 +142,8 @@ You should now have three values: **Instance ARN**, **Identity store ID**,
 1. Still logged in to **339140804537** as root, in the **same Region** you
    enabled Identity Center in (step 3 above).
 2. **CloudFormation** > **Create stack** > **With new resources** > upload
-   `identity-center.yaml`.
+   `identity-center.yaml`. Name the stack `identity-center`, matching the
+   template filename (same convention as `scp-guardrails.yaml` above).
 3. Fill in the parameters:
    - `pInstanceArn`, `pIdentityStoreId`, `pAdminUserId` - the three values
      from the prerequisites above (no defaults - you must supply these).

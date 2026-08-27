@@ -29,7 +29,7 @@ Parameters:
       policy inside the member account grants. Must match
       identity-center.yaml's pAllowedServiceActions - that permission set's
       own policy is a second layer, but this SCP is the authoritative
-      ceiling either way. ses/sns/sqs added for mootmaker-e2e's real-email
+      ceiling either way. ses/sns/sqs added for mootmaker-test-infra's real-email
       testing pipeline (SES receiving, SNS, SQS) - see that repo's
       testing-strategy.md.
 

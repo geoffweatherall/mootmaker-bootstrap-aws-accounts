@@ -17,11 +17,13 @@ Two parts, one per account:
 - [workload-account/](workload-account/README.md) - CloudFormation for the
   workload account (431071856068, and any future ones): scheduled credential
   rotation and billing alerts. This is the account
-  [mootmaker-api](https://github.com/geoffweatherall/mootmaker-api),
-  [mootmaker-webapp](https://github.com/geoffweatherall/mootmaker-webapp),
-  and [mootmaker-domain](https://github.com/geoffweatherall/mootmaker-domain)
-  deploy their `test` and `production` environments into (see each repo's
-  own README for their `deploy.sh`).
+  [mootmaker-api](https://github.com/geoffweatherall/mootmaker-api) and
+  [mootmaker-webapp](https://github.com/geoffweatherall/mootmaker-webapp)
+  deploy their `test`/`production`/ephemeral environments into (see each
+  repo's own README for their `deploy.sh`), and where
+  [mootmaker-domain](https://github.com/geoffweatherall/mootmaker-domain)
+  and [mootmaker-test-infra](https://github.com/geoffweatherall/mootmaker-test-infra)'s
+  email pipeline deploy once, persistently, shared across every environment.
 
 ## Configuring AWS access on a new machine
 
