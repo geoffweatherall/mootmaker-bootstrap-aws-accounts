@@ -42,7 +42,7 @@ cloudfront, iam, sts, logs, cloudwatch` (the last for viewing metrics/alarms
 in the workspace account, e.g. CloudWatch Logs Insights / metric dashboards),
 `cloudformation` (stack-based deploys), `route53, acm` (custom-domain setup
 for mootmaker-webapp/mootmaker-api/mootmaker-domain), plus `events`
-(EventBridge - schedules mootmaker-tools/sample-data-topup's weekly Lambda
+(EventBridge - schedules mootmaker-demo-data/sample-data-topup's weekly Lambda
 trigger), `ses, sns, sqs` (mootmaker-test-infra's real-email testing
 pipeline: SES receiving, SNS, SQS), plus `budgets, ce, support,
 trustedadvisor, health` for account hygiene and a couple of
