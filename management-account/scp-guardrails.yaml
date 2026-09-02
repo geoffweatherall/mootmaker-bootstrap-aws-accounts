@@ -22,7 +22,7 @@ Parameters:
 
   pAllowedServiceActions:
     Type: CommaDelimitedList
-    Default: "s3:*,dynamodb:*,lambda:*,appsync:*,cognito-idp:*,cloudfront:*,route53:*,acm:*,iam:*,sts:*,logs:*,cloudwatch:*,cloudformation:*,budgets:*,ce:*,support:*,trustedadvisor:*,health:*,events:*,ses:*,sns:*,sqs:*,organizations:Describe*,organizations:List*"
+    Default: "s3:*,dynamodb:*,lambda:*,appsync:*,cognito-idp:*,cloudfront:*,route53:*,acm:*,iam:*,sts:*,logs:*,cloudwatch:*,cloudformation:*,budgets:*,ce:*,support:*,trustedadvisor:*,health:*,events:*,ses:*,sns:*,sqs:*,ssm:*Parameter*,ssm:DescribeParameters,ssm:AddTagsToResource,ssm:RemoveTagsFromResource,ssm:ListTagsForResource,kms:Encrypt,kms:Decrypt,kms:DescribeKey,organizations:Describe*,organizations:List*"
     Description: >-
       Service action prefixes member accounts are allowed to use. Anything
       not listed here is denied by omission, regardless of what any IAM
@@ -31,7 +31,19 @@ Parameters:
       own policy is a second layer, but this SCP is the authoritative
       ceiling either way. ses/sns/sqs added for mootmaker-test-infra's real-email
       testing pipeline (SES receiving, SNS, SQS) - see that repo's
-      testing-strategy.md.
+      testing-strategy.md. ssm/kms
+      added 2026-09-02 for mootmaker-demo-data's credentials, which
+      mootmaker-api publishes as SSM parameters under
+      /mootmaker/<environment>/demo-data/ and the demo-data Lambda reads at
+      runtime - see mootmaker/designs/demo-data-component.md. These two are
+      deliberately NOT granted as "ssm:*"/"kms:*" the way every other service
+      here is: "ssm:*" would also grant Session Manager and Run Command
+      (remote command execution), and "kms:*" would allow kms:CreateKey,
+      which carries a standing $1/month-per-key charge that this project's
+      scale-to-zero cost profile specifically avoids. The parameter and tag
+      actions are what Terraform needs to manage aws_ssm_parameter;
+      Encrypt/Decrypt/DescribeKey are what SecureString needs against the
+      AWS-managed alias/aws/ssm key.
 
 Resources:
   RegionAllowlistSCP:

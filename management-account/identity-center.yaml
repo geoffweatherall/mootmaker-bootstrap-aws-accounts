@@ -63,7 +63,7 @@ Parameters:
 
   pAllowedServiceActions:
     Type: CommaDelimitedList
-    Default: "s3:*,dynamodb:*,lambda:*,appsync:*,cognito-idp:*,cloudfront:*,route53:*,acm:*,iam:*,sts:*,logs:*,cloudwatch:*,cloudformation:*,budgets:*,ce:*,support:*,trustedadvisor:*,health:*,events:*,ses:*,sns:*,sqs:*,organizations:Describe*,organizations:List*"
+    Default: "s3:*,dynamodb:*,lambda:*,appsync:*,cognito-idp:*,cloudfront:*,route53:*,acm:*,iam:*,sts:*,logs:*,cloudwatch:*,cloudformation:*,budgets:*,ce:*,support:*,trustedadvisor:*,health:*,events:*,ses:*,sns:*,sqs:*,ssm:*Parameter*,ssm:DescribeParameters,ssm:AddTagsToResource,ssm:RemoveTagsFromResource,ssm:ListTagsForResource,kms:Encrypt,kms:Decrypt,kms:DescribeKey,organizations:Describe*,organizations:List*"
     Description: >-
       Must match the service-allowlist SCP. Keep both in sync when adding a
       new service. route53/acm were already exempted from the region-lock
@@ -75,7 +75,19 @@ Parameters:
       region-exempted below - they're regional, same as dynamodb/lambda/etc,
       and this project only ever deploys them to us-east-1) back
       mootmaker-test-infra's real-email testing pipeline: an SES domain identity,
-      receipt rule set/rule, an SNS topic, and an SQS queue.
+      receipt rule set/rule, an SNS topic, and an SQS queue. ssm/kms
+      added 2026-09-02 for mootmaker-demo-data's credentials, which
+      mootmaker-api publishes as SSM parameters under
+      /mootmaker/<environment>/demo-data/ and the demo-data Lambda reads at
+      runtime - see mootmaker/designs/demo-data-component.md. These two are
+      deliberately NOT granted as "ssm:*"/"kms:*" the way every other service
+      here is: "ssm:*" would also grant Session Manager and Run Command
+      (remote command execution), and "kms:*" would allow kms:CreateKey,
+      which carries a standing $1/month-per-key charge that this project's
+      scale-to-zero cost profile specifically avoids. The parameter and tag
+      actions are what Terraform needs to manage aws_ssm_parameter;
+      Encrypt/Decrypt/DescribeKey are what SecureString needs against the
+      AWS-managed alias/aws/ssm key.
 
 Resources:
   AdminGroup:
