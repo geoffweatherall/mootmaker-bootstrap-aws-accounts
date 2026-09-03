@@ -43,7 +43,7 @@ in the workspace account, e.g. CloudWatch Logs Insights / metric dashboards),
 `cloudformation` (stack-based deploys), `route53, acm` (custom-domain setup
 for mootmaker-webapp/mootmaker-api/mootmaker-domain), plus `events`
 (EventBridge - schedules mootmaker-demo-data's daily Lambda
-trigger), `ses, sns, sqs` (mootmaker-test-infra's real-email testing
+trigger), `ses, sns, sqs` (mootmaker-email-testing's real-email testing
 pipeline: SES receiving, SNS, SQS), plus `budgets, ce, support,
 trustedadvisor, health` for account hygiene and a couple of
 `organizations:Describe*/List*` calls for basic self-service visibility from
