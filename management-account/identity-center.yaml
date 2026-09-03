@@ -74,7 +74,7 @@ Parameters:
       manage their DNS records and TLS certificates. ses/sns/sqs (not
       region-exempted below - they're regional, same as dynamodb/lambda/etc,
       and this project only ever deploys them to us-east-1) back
-      mootmaker-test-infra's real-email testing pipeline: an SES domain identity,
+      mootmaker-email-testing's real-email testing pipeline: an SES domain identity,
       receipt rule set/rule, an SNS topic, and an SQS queue. ssm/kms
       added 2026-09-02 for mootmaker-demo-data's credentials, which
       mootmaker-api publishes as SSM parameters under

@@ -22,7 +22,7 @@ Two parts, one per account:
   deploy their `test`/`production`/ephemeral environments into (see each
   repo's own README for their `deploy.sh`), and where
   [mootmaker-domain](https://github.com/geoffweatherall/mootmaker-domain)
-  and [mootmaker-test-infra](https://github.com/geoffweatherall/mootmaker-test-infra)'s
+  and [mootmaker-email-testing](https://github.com/geoffweatherall/mootmaker-email-testing)'s
   email pipeline deploy once, persistently, shared across every environment.
 
 ## Configuring AWS access on a new machine
