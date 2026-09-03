@@ -9,6 +9,10 @@ configured - not from the management account. Two independent templates:
 - `billing-alert.yaml` - two AWS Budgets that email an alert when this
   account's monthly cost is forecasted or actually exceeds a low and a
   high threshold.
+- `github-actions-deploy-role.yaml` - the GitHub Actions OIDC provider and deploy
+  role [mootmaker/designs/ci-cd-pipeline.md](https://github.com/geoffweatherall/mootmaker/blob/main/designs/ci-cd-pipeline.md)'s
+  release pipeline assumes to deploy `test`/`production` - no long-lived AWS
+  credential is ever stored in GitHub.
 
 They don't depend on each other and can be deployed in either order.
 
@@ -80,3 +84,28 @@ link to confirm. **Free, but exactly at the limit**: the first two budgets
 per AWS account cost nothing, and this template creates exactly two. That's
 the full free allowance for this account - any additional budget created
 here later (including manually, via the console) will cost ~$0.02/day.
+
+## github-actions-deploy-role.yaml
+
+Creates the `token.actions.githubusercontent.com` OIDC provider (this account has none yet - a
+fresh `AWS::IAM::OIDCProvider`, verified via `aws iam list-open-id-connect-providers` before
+writing this) and one deploy role, `mootmaker-release-github-actions-deploy`.
+
+**Trust is scoped to `job_workflow_ref`, not just `repository`** - only a run of one of four exact
+reusable-workflow files (`mootmaker-api`/`mootmaker-webapp`/`mootmaker-demo-data`'s
+`release-build.yml`, at a `refs/tags/v*` ref; `mootmaker-release`'s own `release.yml`, at
+`refs/heads/main`) can assume this role. None of those workflow files exist yet - see
+[mootmaker/designs/ci-cd-pipeline.md](https://github.com/geoffweatherall/mootmaker/blob/main/designs/ci-cd-pipeline.md),
+still `Drafting`. Applying this stack ahead of those files existing is safe (nothing can assume a
+role whose trust condition nothing yet matches); it just means the deploy role sits unused until
+the pipeline is actually built.
+
+**Permission policy is a first draft, scoped by resource-name pattern (`*-mootmaker-*`) everywhere
+AWS's IAM model allows it** (S3, DynamoDB, Lambda, the Lambda exec roles, EventBridge, SSM, Route
+53 - scoped to the actual `mootmaker.com` hosted zone). AppSync, Cognito, ACM, and CloudFront
+assign IDs only at creation time, so their create actions are `Resource: "*"` - not an oversight,
+just what those services' ARN model allows. Built by grepping
+`mootmaker-api`/`mootmaker-webapp`/`mootmaker-demo-data`'s `deploy/terraform/*.tf` directly for
+every `resource "aws_*"` block, not guessed from memory. **Expect this to need iteration** once
+real workflow runs surface a missing permission - see the design doc's own Risks table for why
+that's the accepted cost of starting narrow.

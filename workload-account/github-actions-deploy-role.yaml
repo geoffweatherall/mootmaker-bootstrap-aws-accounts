@@ -1,0 +1,271 @@
+# GitHub Actions OIDC provider + a deploy role for mootmaker/designs/ci-cd-pipeline.md's release
+# pipeline. No long-lived AWS credential is ever stored in GitHub - a workflow run exchanges a
+# short-lived GitHub-issued OIDC token for temporary credentials by assuming this role. Deploy in
+# the workload account (431071856068). Requires CAPABILITY_NAMED_IAM.
+#
+# SCOPE, DELIBERATELY NARROW: trust is conditioned on job_workflow_ref, not just repository - so
+# only a run of one of the four specific reusable-workflow files named below (at the ref pattern
+# named below) can assume this role, regardless of what else exists in those repos or who can open
+# a PR against them. See mootmaker/designs/ci-cd-pipeline.md Decision 3 and OQ-4/OQ-3 for the
+# reasoning (a fine-grained PAT, not this role, is what's exposed to a plain PR).
+#
+# FIRST DRAFT, EXPECT ITERATION: the permission policy below is scoped to the AWS resource types
+# mootmaker-api/mootmaker-webapp/mootmaker-demo-data's Terraform actually manages today (verified
+# by grepping their deploy/terraform/*.tf directly, not guessed), resource-scoped by this project's
+# own naming convention (`<environment>-mootmaker-*`) everywhere AWS's IAM model allows pre-creation
+# resource scoping. Several services (AppSync, Cognito, ACM, CloudFront) assign opaque IDs only at
+# creation time, so their create actions can't be scoped narrower than Resource "*" - documented
+# inline at each such statement, not silently broadened. A missing permission surfacing mid-deploy
+# during bring-up is the accepted cost of starting narrow rather than starting broad - see the
+# design doc's own Risks table.
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >-
+  GitHub Actions OIDC provider + deploy role for mootmaker's release pipeline (see
+  mootmaker/designs/ci-cd-pipeline.md). Deploy in the workload account. Requires
+  CAPABILITY_NAMED_IAM. See this file's own header comment for the full reasoning.
+
+Parameters:
+  pMootmakerApiRepo:
+    Type: String
+    Default: geoffweatherall/mootmaker-api
+  pMootmakerWebappRepo:
+    Type: String
+    Default: geoffweatherall/mootmaker-webapp
+  pMootmakerDemoDataRepo:
+    Type: String
+    Default: geoffweatherall/mootmaker-demo-data
+  pMootmakerReleaseRepo:
+    Type: String
+    Default: geoffweatherall/mootmaker-release
+  pAccountId:
+    Type: String
+    Default: "431071856068"
+    Description: This account - used to build resource-name-pattern ARNs below without hardcoding it twice.
+  pRegion:
+    Type: String
+    Default: us-east-1
+
+Resources:
+  # GitHub's own OIDC provider. AWS validates the token against GitHub's actual root CA regardless
+  # of ThumbprintList's value (a 2023 change to how AWS handles this for GitHub/GitLab/Google), but
+  # the CloudFormation resource still requires at least one entry - this is GitHub's long-documented
+  # intermediate CA thumbprint, kept for compatibility rather than because AWS still checks it.
+  GitHubOidcProvider:
+    Type: AWS::IAM::OIDCProvider
+    Properties:
+      Url: https://token.actions.githubusercontent.com
+      ClientIdList:
+        - sts.amazonaws.com
+      ThumbprintList:
+        - 6938fd4d98bab03faadb97b34396831e3780aea
+
+  # Assumed only by a run of one of these four exact reusable-workflow files, at the ref pattern
+  # shown - not by "anything in these repos". mootmaker-api/mootmaker-webapp/mootmaker-demo-data's
+  # release-build.yml is only ever invoked by mootmaker-release's release.yml as
+  # `uses: <repo>/.github/workflows/release-build.yml@<tag>` (Decision 3), so scoping to
+  # refs/tags/v* means this role can only be assumed from a run of a tagged release commit - not an
+  # arbitrary branch, not a PR. mootmaker-release's own release.yml (the orchestrator itself, not a
+  # called reusable workflow) is scoped to refs/heads/main since workflow_dispatch runs from a
+  # branch, not a tag - it needs its own AWS access for the smoke-test job (Decision 9), which reads
+  # mootmaker-email-testing's SQS queue during the test-stage smoke test's real-email signup step.
+  #
+  # None of release-build.yml/release.yml exist yet (mootmaker-release#TODO) - these patterns
+  # describe where they *will* live per the design, not files that exist today. Nothing can actually
+  # assume this role until they're built and pushed at those exact paths.
+  GitHubActionsDeployRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: mootmaker-release-github-actions-deploy
+      MaxSessionDuration: 3600
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Federated: !GetAtt GitHubOidcProvider.Arn
+            Action: sts:AssumeRoleWithWebIdentity
+            Condition:
+              StringEquals:
+                token.actions.githubusercontent.com:aud: sts.amazonaws.com
+              StringLike:
+                token.actions.githubusercontent.com:job_workflow_ref:
+                  - !Sub "${pMootmakerApiRepo}/.github/workflows/release-build.yml@refs/tags/v*"
+                  - !Sub "${pMootmakerWebappRepo}/.github/workflows/release-build.yml@refs/tags/v*"
+                  - !Sub "${pMootmakerDemoDataRepo}/.github/workflows/release-build.yml@refs/tags/v*"
+                  - !Sub "${pMootmakerReleaseRepo}/.github/workflows/release.yml@refs/heads/main"
+      Policies:
+        # Terraform remote state (S3 native locking, use_lockfile - no DynamoDB lock table exists
+        # or is needed). Every component's state lives under its own key in this one bucket, so this
+        # can't be scoped tighter than bucket-wide without hardcoding every current and future
+        # environment/state-key combination.
+        - PolicyName: TerraformState
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: StateBucket
+                Effect: Allow
+                Action:
+                  - s3:GetObject
+                  - s3:PutObject
+                  - s3:DeleteObject
+                  - s3:ListBucket
+                Resource:
+                  - !Sub "arn:aws:s3:::remote-state-${pAccountId}"
+                  - !Sub "arn:aws:s3:::remote-state-${pAccountId}/*"
+
+        # mootmaker-webapp: S3 site bucket (name pattern verified against s3.tf/locals.tf:
+        # <environment>-mootmaker-webapp-site-<account-id>) + CloudFront + ACM + Route 53.
+        - PolicyName: WebappHosting
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: SiteBucket
+                Effect: Allow
+                Action:
+                  - s3:CreateBucket
+                  - s3:DeleteBucket
+                  - s3:GetBucketPolicy
+                  - s3:PutBucketPolicy
+                  - s3:DeleteBucketPolicy
+                  - s3:GetBucketPublicAccessBlock
+                  - s3:PutBucketPublicAccessBlock
+                  - s3:GetObject
+                  - s3:PutObject
+                  - s3:DeleteObject
+                  - s3:ListBucket
+                Resource:
+                  - !Sub "arn:aws:s3:::*-mootmaker-webapp-site-${pAccountId}"
+                  - !Sub "arn:aws:s3:::*-mootmaker-webapp-site-${pAccountId}/*"
+              - Sid: CloudFrontAndAcm
+                Effect: Allow
+                # CloudFront distribution/OAC IDs and ACM certificate ARNs are assigned only at
+                # creation - AWS's IAM model has no way to pre-scope a Create* action to a resource
+                # that doesn't exist yet for either service, so this is Resource "*" deliberately,
+                # not an oversight. Both services are otherwise identify-scoped by this role's own
+                # trust condition (only these four workflow files can reach this policy at all).
+                Action:
+                  - cloudfront:*
+                  - acm:*
+                Resource: "*"
+              - Sid: Route53
+                Effect: Allow
+                Action:
+                  - route53:ChangeResourceRecordSets
+                  - route53:GetChange
+                  - route53:ListResourceRecordSets
+                Resource:
+                  - "arn:aws:route53:::hostedzone/Z03440533GE3SURWYAZRT"
+                  - "arn:aws:route53:::change/*"
+
+        # mootmaker-api: AppSync + Cognito + DynamoDB + the Lambdas behind AppSync's resolvers and
+        # database-reset/database-repair, plus their IAM exec roles.
+        - PolicyName: ApiCore
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: AppSyncAndCognito
+                Effect: Allow
+                # Same reasoning as CloudFront/ACM above: AppSync API IDs and Cognito user/identity
+                # pool IDs are assigned at creation, so this can't be scoped narrower than "*" for
+                # the create path. Left broad rather than half-scoped in a way that looks tighter
+                # than it actually is.
+                Action:
+                  - appsync:*
+                  - cognito-idp:*
+                Resource: "*"
+              - Sid: DynamoDbTables
+                Effect: Allow
+                Action:
+                  - dynamodb:CreateTable
+                  - dynamodb:DeleteTable
+                  - dynamodb:DescribeTable
+                  - dynamodb:UpdateTable
+                  - dynamodb:TagResource
+                  - dynamodb:UntagResource
+                  - dynamodb:ListTagsOfResource
+                  - dynamodb:PutItem
+                  - dynamodb:GetItem
+                  - dynamodb:DeleteItem
+                Resource:
+                  - !Sub "arn:aws:dynamodb:${pRegion}:${pAccountId}:table/*-mootmaker-*"
+              - Sid: LambdaFunctions
+                Effect: Allow
+                Action:
+                  - lambda:CreateFunction
+                  - lambda:DeleteFunction
+                  - lambda:GetFunction
+                  - lambda:UpdateFunctionCode
+                  - lambda:UpdateFunctionConfiguration
+                  - lambda:CreateAlias
+                  - lambda:DeleteAlias
+                  - lambda:UpdateAlias
+                  - lambda:GetAlias
+                  - lambda:AddPermission
+                  - lambda:RemovePermission
+                  - lambda:GetPolicy
+                  - lambda:TagResource
+                  - lambda:UntagResource
+                  - lambda:ListTags
+                Resource:
+                  - !Sub "arn:aws:lambda:${pRegion}:${pAccountId}:function:*-mootmaker-*"
+              - Sid: LambdaExecRoles
+                Effect: Allow
+                Action:
+                  - iam:CreateRole
+                  - iam:DeleteRole
+                  - iam:GetRole
+                  - iam:TagRole
+                  - iam:UntagRole
+                  - iam:PutRolePolicy
+                  - iam:DeleteRolePolicy
+                  - iam:GetRolePolicy
+                  - iam:AttachRolePolicy
+                  - iam:DetachRolePolicy
+                  - iam:PassRole
+                Resource:
+                  - !Sub "arn:aws:iam::${pAccountId}:role/*-mootmaker-*"
+
+        # mootmaker-demo-data: its Lambda + IAM exec role (already covered by ApiCore's
+        # LambdaFunctions/LambdaExecRoles statements above, same naming convention) plus its own
+        # EventBridge schedule and SSM parameters (the demo-data-credentials.tf client-credentials
+        # values it reads at deploy time).
+        - PolicyName: DemoData
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: EventBridgeSchedule
+                Effect: Allow
+                Action:
+                  - events:PutRule
+                  - events:DeleteRule
+                  - events:DescribeRule
+                  - events:PutTargets
+                  - events:RemoveTargets
+                  - events:ListTargetsByRule
+                Resource:
+                  - !Sub "arn:aws:events:${pRegion}:${pAccountId}:rule/*-mootmaker-*"
+              - Sid: SsmParameters
+                Effect: Allow
+                Action:
+                  - ssm:GetParameter
+                  - ssm:PutParameter
+                  - ssm:DeleteParameter
+                  - ssm:AddTagsToResource
+                Resource:
+                  - !Sub "arn:aws:ssm:${pRegion}:${pAccountId}:parameter/*mootmaker*"
+
+        - PolicyName: Misc
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: CallerIdentity
+                Effect: Allow
+                Action: sts:GetCallerIdentity
+                Resource: "*"
+
+Outputs:
+  DeployRoleArn:
+    Description: Paste into each component repo's release-build.yml (and mootmaker-release's release.yml) as the role-to-assume input for aws-actions/configure-aws-credentials.
+    Value: !GetAtt GitHubActionsDeployRole.Arn
+  OidcProviderArn:
+    Value: !GetAtt GitHubOidcProvider.Arn
