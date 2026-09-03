@@ -56,7 +56,9 @@ aws sso login
 ```
 
 This opens a browser, you sign in (MFA prompt included), and short-lived
-credentials (4 hours by default) are cached locally. Because this is the
+credentials (12 hours, per `pSessionDurationIso8601` in
+[identity-center.yaml](management-account/identity-center.yaml)) are cached
+locally. Because this is the
 `[default]` profile, every AWS CLI/Terraform command - including this
 workspace's `deploy.sh` scripts - picks them up automatically, no `--profile`
 flag or `AWS_PROFILE` env var needed.

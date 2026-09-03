@@ -47,10 +47,17 @@ Parameters:
 
   pSessionDurationIso8601:
     Type: String
-    Default: PT4H
+    Default: PT12H
     Description: >-
       Max lifetime of a session granted through this permission set, ISO 8601
-      duration format.
+      duration format. PT12H is the AWS maximum for a permission set session -
+      raised from the previous PT4H so long unattended runs (e.g. the CI/CD
+      pipeline build-out) don't stall mid-way when assumed-role credentials
+      expire. This is separate from the IAM Identity Center SSO session
+      duration (console-only, Settings > Authentication), which is the
+      binding constraint on how long the CLI can keep refreshing without
+      interactive re-login - see
+      https://github.com/geoffweatherall/mootmaker-bootstrap-aws-accounts/issues/8.
 
   pAllowedRegions:
     Type: CommaDelimitedList
