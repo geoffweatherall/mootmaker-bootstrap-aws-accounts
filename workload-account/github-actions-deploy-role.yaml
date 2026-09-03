@@ -57,7 +57,7 @@ Resources:
       ClientIdList:
         - sts.amazonaws.com
       ThumbprintList:
-        - 6938fd4d98bab03faadb97b34396831e3780aea
+        - 6938fd4d98bab03faadb97b34396831e3780aea1
 
   # Assumed only by a run of one of these four exact reusable-workflow files, at the ref pattern
   # shown - not by "anything in these repos". mootmaker-api/mootmaker-webapp/mootmaker-demo-data's
