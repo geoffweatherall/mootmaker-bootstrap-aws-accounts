@@ -88,7 +88,7 @@ Parameters:
       added 2026-09-02 for mootmaker-demo-data's credentials, which
       mootmaker-api publishes as SSM parameters under
       /mootmaker/<environment>/demo-data/ and the demo-data Lambda reads at
-      runtime - see mootmaker/designs/demo-data-component.md. These two are
+      runtime - see mootmaker/designs/archive/demo-data-component.md. These two are
       deliberately NOT granted as "ssm:*"/"kms:*" the way every other service
       here is: "ssm:*" would also grant Session Manager and Run Command
       (remote command execution), and "kms:*" would allow kms:CreateKey,
