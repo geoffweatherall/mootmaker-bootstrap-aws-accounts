@@ -25,18 +25,33 @@ Description: >-
   CAPABILITY_NAMED_IAM. See this file's own header comment for the full reasoning.
 
 Parameters:
+  # These carry the ID-qualified "<owner>@<owner-id>/<repo>@<repo-id>" form, NOT plain
+  # "owner/repo", because this account has GitHub's immutable subject claim enabled: the sub in a
+  # real token reads
+  #   repo:geoffweatherall@1743794/mootmaker-api@1285433321:ref:refs/tags/v0.0.3-rc1
+  # A plain "geoffweatherall/mootmaker-api" pattern simply does not match, and the failure looks
+  # like a generic authorization denial - see issue #9.
+  #
+  # Pinning the numeric IDs is the point of that GitHub feature, and is deliberate here rather
+  # than merely tolerated: IDs survive a repository rename, and a repo renamed away cannot take
+  # this trust with it. That matters in this project specifically - mootmaker-test-infra was
+  # renamed to mootmaker-ephemeral-envs on 2026-09-03 and GitHub's redirect kept stale clones
+  # working silently.
+  #
+  # If a repo is ever recreated from scratch (not renamed) its ID changes and these must be
+  # updated: gh api repos/<owner>/<repo> --jq .id
   pMootmakerApiRepo:
     Type: String
-    Default: geoffweatherall/mootmaker-api
+    Default: geoffweatherall@1743794/mootmaker-api@1285433321
   pMootmakerWebappRepo:
     Type: String
-    Default: geoffweatherall/mootmaker-webapp
+    Default: geoffweatherall@1743794/mootmaker-webapp@1286824006
   pMootmakerDemoDataRepo:
     Type: String
-    Default: geoffweatherall/mootmaker-demo-data
+    Default: geoffweatherall@1743794/mootmaker-demo-data@1300176503
   pMootmakerReleaseRepo:
     Type: String
-    Default: geoffweatherall/mootmaker-release
+    Default: geoffweatherall@1743794/mootmaker-release@1355335355
   pAccountId:
     Type: String
     Default: "431071856068"
@@ -87,12 +102,29 @@ Resources:
             Condition:
               StringEquals:
                 token.actions.githubusercontent.com:aud: sts.amazonaws.com
+              # Keyed on `sub`, NOT `job_workflow_ref`. AWS supports only `sub` and `aud` as OIDC
+              # condition keys - GitHub's own AWS guide states "Support for custom claims for OIDC
+              # is unavailable in AWS". An unsupported key is not rejected when the policy is
+              # written; it silently evaluates as absent, so the StringLike never matches and every
+              # assume-role is denied. That is exactly how this failed on the first real proving
+              # run - see issue #9.
+              #
+              # Consequence, forced rather than chosen: `sub` does not carry the workflow filename,
+              # so access cannot be pinned to release-build.yml specifically. Repo and ref are
+              # still pinned; any workflow in these repos at a v* tag can assume this role. AWS
+              # offers no way to scope by workflow file.
+              #
+              # Note the mootmaker-release entry is the one that matters for real releases: a
+              # reusable workflow called via workflow_call presents the CALLER's sub, so when
+              # release.yml calls a component's release-build.yml, the token says
+              # mootmaker-release@refs/heads/main - not the component. The component tag entries
+              # below exist for standalone proving runs dispatched directly at a component repo.
               StringLike:
-                token.actions.githubusercontent.com:job_workflow_ref:
-                  - !Sub "${pMootmakerApiRepo}/.github/workflows/release-build.yml@refs/tags/v*"
-                  - !Sub "${pMootmakerWebappRepo}/.github/workflows/release-build.yml@refs/tags/v*"
-                  - !Sub "${pMootmakerDemoDataRepo}/.github/workflows/release-build.yml@refs/tags/v*"
-                  - !Sub "${pMootmakerReleaseRepo}/.github/workflows/release.yml@refs/heads/main"
+                token.actions.githubusercontent.com:sub:
+                  - !Sub "repo:${pMootmakerApiRepo}:ref:refs/tags/v*"
+                  - !Sub "repo:${pMootmakerWebappRepo}:ref:refs/tags/v*"
+                  - !Sub "repo:${pMootmakerDemoDataRepo}:ref:refs/tags/v*"
+                  - !Sub "repo:${pMootmakerReleaseRepo}:ref:refs/heads/main"
       Policies:
         # Terraform remote state (S3 native locking, use_lockfile - no DynamoDB lock table exists
         # or is needed). Every component's state lives under its own key in this one bucket, so this
@@ -133,6 +165,30 @@ Resources:
                   - s3:PutObject
                   - s3:DeleteObject
                   - s3:ListBucket
+                  # Terraform refreshes every bucket sub-resource it manages, and reads several it
+                  # does not, to detect drift - so these are needed for destroy as much as apply.
+                  # All read-only, still scoped to the webapp site bucket. Added 2026-09-03 during
+                  # bring-up, after s3:GetBucketAcl blocked the first webapp proving run.
+                  - s3:GetBucketAcl
+                  - s3:GetBucketCORS
+                  - s3:GetBucketLocation
+                  - s3:GetBucketLogging
+                  - s3:GetBucketNotification
+                  - s3:GetBucketObjectLockConfiguration
+                  - s3:GetBucketRequestPayment
+                  - s3:GetBucketTagging
+                  - s3:GetBucketVersioning
+                  - s3:GetBucketWebsite
+                  - s3:GetAccelerateConfiguration
+                  - s3:GetEncryptionConfiguration
+                  - s3:GetLifecycleConfiguration
+                  - s3:GetReplicationConfiguration
+                  # Emptying the bucket before deleting it enumerates object versions and delete
+                  # markers, not just current objects - so teardown needs these even though the
+                  # bucket is not deliberately versioned. Without them, destroy leaves the bucket
+                  # behind. Added 2026-09-03 during bring-up.
+                  - s3:ListBucketVersions
+                  - s3:DeleteObjectVersion
                 Resource:
                   - !Sub "arn:aws:s3:::*-mootmaker-webapp-site-${pAccountId}"
                   - !Sub "arn:aws:s3:::*-mootmaker-webapp-site-${pAccountId}/*"
@@ -153,9 +209,33 @@ Resources:
                   - route53:ChangeResourceRecordSets
                   - route53:GetChange
                   - route53:ListResourceRecordSets
+                  # Added 2026-09-03 during bring-up: Terraform's aws_route53_zone data source
+                  # reads the zone itself and its tags, not just its records. Both stay scoped to
+                  # this one hosted zone.
+                  - route53:GetHostedZone
+                  - route53:ListTagsForResource
                 Resource:
                   - "arn:aws:route53:::hostedzone/Z03440533GE3SURWYAZRT"
                   - "arn:aws:route53:::change/*"
+              # route53:ListHostedZones cannot be resource-scoped - it is a list operation over the
+              # account, so AWS only accepts "*". Added 2026-09-03 after the first successful-OIDC
+              # proving run failed on it: Terraform's aws_route53_zone data source calls it to
+              # resolve the zone by name before touching any record. Read-only.
+              - Sid: Route53List
+                Effect: Allow
+                Action:
+                  - route53:ListHostedZones
+                  - route53:ListHostedZonesByName
+                Resource: "*"
+              # Terraform reads the SES domain identity's verification state on every apply that
+              # touches the email pipeline's DNS records. Read-only, and there is no narrower
+              # resource form for these two - SES identity verification calls take "*".
+              - Sid: SesRead
+                Effect: Allow
+                Action:
+                  - ses:GetIdentityVerificationAttributes
+                  - ses:GetIdentityDkimAttributes
+                Resource: "*"
 
         # mootmaker-api: AppSync + Cognito + DynamoDB + the Lambdas behind AppSync's resolvers and
         # database-reset/database-repair, plus their IAM exec roles.
@@ -186,6 +266,12 @@ Resources:
                   - dynamodb:PutItem
                   - dynamodb:GetItem
                   - dynamodb:DeleteItem
+                  # Terraform refreshes these sub-resources on every plan and destroy, not just on
+                  # create. Missing them fails the refresh, which breaks `terraform destroy` as
+                  # surely as it breaks apply - that is how the first deploying run stranded four
+                  # tables. Added 2026-09-03 during bring-up; all read-only.
+                  - dynamodb:DescribeContinuousBackups
+                  - dynamodb:DescribeTimeToLive
                 Resource:
                   - !Sub "arn:aws:dynamodb:${pRegion}:${pAccountId}:table/*-mootmaker-*"
               - Sid: LambdaFunctions
@@ -206,6 +292,30 @@ Resources:
                   - lambda:TagResource
                   - lambda:UntagResource
                   - lambda:ListTags
+                  # Terraform reads these on every refresh of an aws_lambda_function, so they are
+                  # needed for destroy as much as for apply. Read-only, still scoped to
+                  # *-mootmaker-* functions. Added 2026-09-03 during bring-up.
+                  # Needed only on the UPDATE path, which is why no ephemeral proving run caught
+                  # it. Creating a function with publish = true publishes version 1 as part of
+                  # CreateFunction; updating an existing one requires a separate PublishVersion
+                  # call. Ephemeral environments are always created from nothing, so they exercise
+                  # only the create path - test and production persist and are updated on every
+                  # release, so they hit this every time. Added 2026-09-03 after it failed the
+                  # second deploy to test.
+                  - lambda:PublishVersion
+                  - lambda:ListVersionsByFunction
+                  - lambda:GetFunctionConfiguration
+                  - lambda:GetFunctionCodeSigningConfig
+                  - lambda:GetFunctionConcurrency
+                  - lambda:GetRuntimeManagementConfig
+                  # Not a Terraform action: the acceptance suites invoke database-reset directly
+                  # with AWS credentials to reset an environment before each test (see
+                  # mootmaker-api's README, "Authentication in end-to-end tests"), and
+                  # mootmaker-demo-data's seed step invokes its own Lambda the same way. Without
+                  # this, deploy succeeds and acceptance fails. Still scoped to *-mootmaker-*
+                  # functions, so it cannot reach anything outside this project. Added 2026-09-03
+                  # during bring-up.
+                  - lambda:InvokeFunction
                 Resource:
                   - !Sub "arn:aws:lambda:${pRegion}:${pAccountId}:function:*-mootmaker-*"
               - Sid: LambdaExecRoles
@@ -222,6 +332,13 @@ Resources:
                   - iam:AttachRolePolicy
                   - iam:DetachRolePolicy
                   - iam:PassRole
+                  # Terraform lists a role's inline and attached policies on every refresh, so
+                  # these are needed for destroy as much as for apply. Read-only, and still scoped
+                  # to *-mootmaker-* roles. Added 2026-09-03 during bring-up.
+                  - iam:ListRolePolicies
+                  - iam:ListAttachedRolePolicies
+                  - iam:ListRoleTags
+                  - iam:ListInstanceProfilesForRole
                 Resource:
                   - !Sub "arn:aws:iam::${pAccountId}:role/*-mootmaker-*"
 
@@ -242,17 +359,50 @@ Resources:
                   - events:PutTargets
                   - events:RemoveTargets
                   - events:ListTargetsByRule
+                  # Terraform reads a rule's tags on every refresh, so this is needed for destroy
+                  # as much as apply. Read-only, still scoped to *-mootmaker-* rules. Added
+                  # 2026-09-03 after it blocked the first demo-data proving run.
+                  - events:ListTagsForResource
                 Resource:
                   - !Sub "arn:aws:events:${pRegion}:${pAccountId}:rule/*-mootmaker-*"
               - Sid: SsmParameters
                 Effect: Allow
                 Action:
                   - ssm:GetParameter
+                  - ssm:GetParameters
                   - ssm:PutParameter
                   - ssm:DeleteParameter
                   - ssm:AddTagsToResource
+                  - ssm:RemoveTagsFromResource
+                  - ssm:ListTagsForResource
                 Resource:
                   - !Sub "arn:aws:ssm:${pRegion}:${pAccountId}:parameter/*mootmaker*"
+              # ssm:DescribeParameters is a list operation over the account and AWS rejects any
+              # resource form narrower than "*" - the denial names
+              # arn:aws:ssm:<region>:<account>:* rather than the parameter itself. Terraform calls
+              # it to read parameter metadata on every refresh, so it is needed for destroy too.
+              # Read-only, and the SCP service allowlist already permits exactly this action.
+              # Added 2026-09-03 during bring-up.
+              # mootmaker-webapp's acceptance suite reads real Cognito emails out of
+              # mootmaker-email-testing's persistent SES/SNS/SQS pipeline - see that repo's
+              # testing-strategy.md. Standing shared infrastructure, not created per environment,
+              # so this is scoped to that one queue by name rather than to a wildcard. Delete is
+              # included because the suite consumes the messages it reads; leaving them would make
+              # every later run pick up a stale code. Added 2026-09-03 during bring-up.
+              - Sid: EmailTestingQueue
+                Effect: Allow
+                Action:
+                  - sqs:ReceiveMessage
+                  - sqs:DeleteMessage
+                  - sqs:GetQueueAttributes
+                  - sqs:GetQueueUrl
+                Resource:
+                  - !Sub "arn:aws:sqs:${pRegion}:${pAccountId}:mootmaker-e2e-inbound-email"
+              - Sid: SsmDescribeParameters
+                Effect: Allow
+                Action:
+                  - ssm:DescribeParameters
+                Resource: "*"
 
         - PolicyName: Misc
           PolicyDocument:
