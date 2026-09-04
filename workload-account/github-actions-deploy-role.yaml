@@ -462,6 +462,21 @@ Resources:
                   - logs:DescribeLogGroups
                 Resource: "*"
 
+              # The scheduled sweep asks "does a function still exist for this log group?", which
+              # means listing every function in the account - lambda:ListFunctions takes no
+              # narrower resource form either, same as the two above. Read-only, and the sweep
+              # never deletes a group whose function it found.
+              #
+              # Added after the sweep's first CI run failed on it. It had been verified locally
+              # first, but under an SSO admin session rather than this role - so the gap only
+              # appeared where it mattered. That is the second time in this build-out that testing
+              # under different credentials than production hid a permissions gap.
+              - Sid: FunctionDiscovery
+                Effect: Allow
+                Action:
+                  - lambda:ListFunctions
+                Resource: "*"
+
         - PolicyName: Misc
           PolicyDocument:
             Version: "2012-10-17"
