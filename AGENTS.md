@@ -35,8 +35,9 @@ On GitHub: <https://github.com/geoffweatherall/mootmaker/blob/main/docs/process/
   reading the diff is the review, merging is the approval.
 - **A green acceptance run against a real deployed environment** is the definition of working — not
   a passing unit suite, and not a successful deploy.
-- **Environments are `production` or ephemeral.** Tear down any ephemeral environment you create;
-  that is part of finishing, not a tidy-up afterwards.
+- **Environments are `production`, `test`, or ephemeral.** `test` and `production` change only
+  through `release.yml` in mootmaker-release — never `./deploy.sh` by hand. Everything else is
+  ephemeral: tear down any you create, as part of finishing rather than as a tidy-up afterwards.
 - **If your change makes a document wrong, fixing it is part of the change.**
 - **Verify against reality, not your own output.** A script exiting zero is not evidence that the
   thing it was meant to do happened.
