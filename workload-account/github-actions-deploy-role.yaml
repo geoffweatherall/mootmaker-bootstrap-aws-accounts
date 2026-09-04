@@ -52,6 +52,14 @@ Parameters:
   pMootmakerReleaseRepo:
     Type: String
     Default: geoffweatherall@1743794/mootmaker-release@1355335355
+  # The scheduled ephemeral sweep (mootmaker/designs/ci-cd-pipeline.md rollout step 11) runs from
+  # this repo, on a cron from main. It is not part of a release - it tears down environments a
+  # release left behind - so it needs its own entry rather than borrowing one of the four above.
+  # This is the repo that was renamed from mootmaker-test-infra on 2026-09-03, which is exactly the
+  # case the ID pinning above exists for: the ID is unchanged by the rename.
+  pMootmakerEphemeralEnvsRepo:
+    Type: String
+    Default: geoffweatherall@1743794/mootmaker-ephemeral-envs@1334617437
   pAccountId:
     Type: String
     Default: "431071856068"
@@ -125,6 +133,7 @@ Resources:
                   - !Sub "repo:${pMootmakerWebappRepo}:ref:refs/tags/v*"
                   - !Sub "repo:${pMootmakerDemoDataRepo}:ref:refs/tags/v*"
                   - !Sub "repo:${pMootmakerReleaseRepo}:ref:refs/heads/main"
+                  - !Sub "repo:${pMootmakerEphemeralEnvsRepo}:ref:refs/heads/main"
       Policies:
         # Terraform remote state (S3 native locking, use_lockfile - no DynamoDB lock table exists
         # or is needed). Every component's state lives under its own key in this one bucket, so this
