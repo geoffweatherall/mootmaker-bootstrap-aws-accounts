@@ -404,6 +404,55 @@ Resources:
                   - ssm:DescribeParameters
                 Resource: "*"
 
+              # Decision 11's two IAM additions. Both are new with the consolidated logging work;
+              # the role previously had no logs permissions at all.
+              #
+              # 1. Managing the components' own log groups. Lambda and AppSync auto-create these on
+              #    first use, unmanaged and with never-expire retention - Decision 11 brings them
+              #    under Terraform so they are tagged and capped at 120 days. Scoped to the two
+              #    prefixes those services actually use for this project.
+              - Sid: ComponentLogGroups
+                Effect: Allow
+                Action:
+                  - logs:CreateLogGroup
+                  - logs:DeleteLogGroup
+                  - logs:PutRetentionPolicy
+                  - logs:DeleteRetentionPolicy
+                  - logs:TagResource
+                  - logs:UntagResource
+                  - logs:ListTagsForResource
+                  - logs:TagLogGroup
+                  - logs:UntagLogGroup
+                  - logs:ListTagsLogGroup
+                Resource:
+                  - !Sub "arn:aws:logs:${pRegion}:${pAccountId}:log-group:/aws/lambda/*-mootmaker-*"
+                  - !Sub "arn:aws:logs:${pRegion}:${pAccountId}:log-group:/aws/lambda/*-mootmaker-*:*"
+                  - !Sub "arn:aws:logs:${pRegion}:${pAccountId}:log-group:/aws/appsync/apis/*"
+                  - !Sub "arn:aws:logs:${pRegion}:${pAccountId}:log-group:/aws/appsync/apis/*:*"
+
+              # 2. Shipping each stage's structured output to the release pipeline's own group.
+              #    Write-only and confined to that one group - the pipeline publishes its record,
+              #    it does not read anyone else's logs.
+              - Sid: ReleasePipelineLogShipping
+                Effect: Allow
+                Action:
+                  - logs:CreateLogStream
+                  - logs:PutLogEvents
+                  - logs:DescribeLogStreams
+                Resource:
+                  - !Sub "arn:aws:logs:${pRegion}:${pAccountId}:log-group:/mootmaker/release-pipeline"
+                  - !Sub "arn:aws:logs:${pRegion}:${pAccountId}:log-group:/mootmaker/release-pipeline:*"
+
+              # logs:DescribeLogGroups is a list operation over the account and AWS accepts no
+              # narrower resource form - the same shape as ssm:DescribeParameters above. Terraform
+              # calls it on every refresh of a log group, so it is needed for destroy as well as
+              # apply. Read-only.
+              - Sid: LogGroupDiscovery
+                Effect: Allow
+                Action:
+                  - logs:DescribeLogGroups
+                Resource: "*"
+
         - PolicyName: Misc
           PolicyDocument:
             Version: "2012-10-17"
