@@ -3,13 +3,26 @@
 # short-lived GitHub-issued OIDC token for temporary credentials by assuming this role. Deploy in
 # the workload account (431071856068). Requires CAPABILITY_NAMED_IAM.
 #
-# SCOPE, DELIBERATELY NARROW: trust is conditioned on job_workflow_ref, not just repository - so
-# only a run of one of the four specific reusable-workflow files named below (at the ref pattern
-# named below) can assume this role, regardless of what else exists in those repos or who can open
-# a PR against them. See mootmaker/designs/ci-cd-pipeline.md Decision 3 and OQ-4/OQ-3 for the
-# reasoning (a fine-grained PAT, not this role, is what's exposed to a plain PR).
+# SCOPE - READ THIS BEFORE TRUSTING IT TO BE NARROWER THAN IT IS. This header used to claim trust
+# was conditioned on job_workflow_ref, so that only a run of one specific reusable-workflow file
+# could assume the role. That was the intent, and it is NOT what this template does, because AWS
+# cannot express it: AWS supports only `sub` and `aud` as OIDC condition keys, and GitHub's own AWS
+# guide states "Support for custom claims for OIDC is unavailable in AWS". An unsupported key is
+# not rejected when the policy is written - it silently evaluates as absent, so the condition never
+# matches and every assume-role is denied. That is exactly how this failed on the first real
+# proving run (see issue #9).
 #
-# FIRST DRAFT, EXPECT ITERATION: the permission policy below is scoped to the AWS resource types
+# What is actually enforced is `sub`: repository AND ref pattern, per the entries below. Since
+# `sub` does not carry the workflow filename, ANY workflow in those repos, at a matching ref, can
+# assume this role. Pinning to a specific workflow file is not available in AWS at all. The
+# repository pinning is by immutable numeric ID, which is real and survives a rename.
+#
+# The compensating controls are therefore the ref patterns (components only at refs/tags/v*, the
+# orchestrator and the sweep only at refs/heads/main) plus branch protection on those repos - not
+# workflow-file identity. See mootmaker/designs/ci-cd-pipeline.md Decision 3 and OQ-4/OQ-3 (a
+# fine-grained PAT, not this role, is what's exposed to a plain PR).
+#
+# The permission policy below is scoped to the AWS resource types
 # mootmaker-api/mootmaker-webapp/mootmaker-demo-data's Terraform actually manages today (verified
 # by grepping their deploy/terraform/*.tf directly, not guessed), resource-scoped by this project's
 # own naming convention (`<environment>-mootmaker-*`) everywhere AWS's IAM model allows pre-creation
@@ -82,8 +95,9 @@ Resources:
       ThumbprintList:
         - 6938fd4d98bab03faadb97b34396831e3780aea1
 
-  # Assumed only by a run of one of these four exact reusable-workflow files, at the ref pattern
-  # shown - not by "anything in these repos". mootmaker-api/mootmaker-webapp/mootmaker-demo-data's
+  # Assumed by a run in one of these five repos at the ref pattern shown. NOT restricted to a
+  # specific workflow file, despite the original intent - see this file's header for why AWS cannot
+  # express that. mootmaker-api/mootmaker-webapp/mootmaker-demo-data's
   # release-build.yml is only ever invoked by mootmaker-release's release.yml as
   # `uses: <repo>/.github/workflows/release-build.yml@<tag>` (Decision 3), so scoping to
   # refs/tags/v* means this role can only be assumed from a run of a tagged release commit - not an
@@ -92,9 +106,8 @@ Resources:
   # branch, not a tag - it needs its own AWS access for the smoke-test job (Decision 9), which reads
   # mootmaker-email-testing's SQS queue during the test-stage smoke test's real-email signup step.
   #
-  # None of release-build.yml/release.yml exist yet (mootmaker-release#TODO) - these patterns
-  # describe where they *will* live per the design, not files that exist today. Nothing can actually
-  # assume this role until they're built and pushed at those exact paths.
+  # All of these workflows now exist and have run for real - release.yml has taken releases through
+  # to v0.0.14, and sweep.yml runs daily. This comment previously said none of them existed yet.
   GitHubActionsDeployRole:
     Type: AWS::IAM::Role
     Properties:
