@@ -72,7 +72,7 @@ Parameters:
 
   pAllowedServiceActions:
     Type: CommaDelimitedList
-    Default: "s3:*,dynamodb:*,lambda:*,appsync:*,cognito-idp:*,cloudfront:*,route53:*,acm:*,iam:*,sts:*,logs:*,cloudwatch:*,cloudformation:*,budgets:*,ce:*,support:*,trustedadvisor:*,health:*,events:*,ses:*,sns:*,sqs:*,ssm:*Parameter*,ssm:DescribeParameters,ssm:AddTagsToResource,ssm:RemoveTagsFromResource,ssm:ListTagsForResource,kms:Encrypt,kms:Decrypt,kms:DescribeKey,organizations:Describe*,organizations:List*"
+    Default: "s3:*,dynamodb:*,lambda:*,appsync:*,cognito-idp:*,cloudfront:*,route53:*,acm:*,iam:*,sts:*,logs:*,cloudwatch:*,cloudformation:*,budgets:*,ce:*,support:*,trustedadvisor:*,health:*,events:*,ses:*,sns:*,sqs:*,ssm:*Parameter*,ssm:DescribeParameters,ssm:AddTagsToResource,ssm:RemoveTagsFromResource,ssm:ListTagsForResource,kms:Encrypt,kms:Decrypt,kms:DescribeKey,organizations:Describe*,organizations:List*,servicequotas:*"
     Description: >-
       Must match the service-allowlist SCP. Keep both in sync when adding a
       new service. route53/acm were already exempted from the region-lock
@@ -97,6 +97,23 @@ Parameters:
       actions are what Terraform needs to manage aws_ssm_parameter;
       Encrypt/Decrypt/DescribeKey are what SecureString needs against the
       AWS-managed alias/aws/ssm key.
+      servicequotas added 2026-09-06 so quota increases can be requested and,
+      more importantly, TRACKED from this account. The Lambda
+      concurrent-executions quota here is 10 against a default of 1,000,
+      which is the binding constraint on how much of the pipeline can run at
+      once - see mootmaker#41 and mootmaker#72. It is granted because it is
+      the only way to follow such a request: support:* is already allowed
+      above, but the AWS Support API answers every call with
+      SubscriptionRequiredException on a Basic support plan, so cases are
+      invisible to anything but a human in the console. Service Quotas' own
+      ListRequestedServiceQuotaChangeHistory needs no paid support plan, so a
+      request raised through Service Quotas can be checked programmatically
+      while one raised through Support Center cannot. Granted as
+      servicequotas:* rather than narrowed the way ssm/kms are: there is
+      nothing costly or destructive in the write half -
+      RequestServiceQuotaIncrease only asks AWS for more headroom, and the
+      template actions it also covers are meaningful only in a management
+      account.
 
 Resources:
   AdminGroup:

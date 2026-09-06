@@ -22,7 +22,7 @@ Parameters:
 
   pAllowedServiceActions:
     Type: CommaDelimitedList
-    Default: "s3:*,dynamodb:*,lambda:*,appsync:*,cognito-idp:*,cloudfront:*,route53:*,acm:*,iam:*,sts:*,logs:*,cloudwatch:*,cloudformation:*,budgets:*,ce:*,support:*,trustedadvisor:*,health:*,events:*,ses:*,sns:*,sqs:*,ssm:*Parameter*,ssm:DescribeParameters,ssm:AddTagsToResource,ssm:RemoveTagsFromResource,ssm:ListTagsForResource,kms:Encrypt,kms:Decrypt,kms:DescribeKey,organizations:Describe*,organizations:List*"
+    Default: "s3:*,dynamodb:*,lambda:*,appsync:*,cognito-idp:*,cloudfront:*,route53:*,acm:*,iam:*,sts:*,logs:*,cloudwatch:*,cloudformation:*,budgets:*,ce:*,support:*,trustedadvisor:*,health:*,events:*,ses:*,sns:*,sqs:*,ssm:*Parameter*,ssm:DescribeParameters,ssm:AddTagsToResource,ssm:RemoveTagsFromResource,ssm:ListTagsForResource,kms:Encrypt,kms:Decrypt,kms:DescribeKey,organizations:Describe*,organizations:List*,servicequotas:*"
     Description: >-
       Service action prefixes member accounts are allowed to use. Anything
       not listed here is denied by omission, regardless of what any IAM
@@ -44,6 +44,11 @@ Parameters:
       actions are what Terraform needs to manage aws_ssm_parameter;
       Encrypt/Decrypt/DescribeKey are what SecureString needs against the
       AWS-managed alias/aws/ssm key.
+      servicequotas added 2026-09-06 so the Lambda concurrent-executions
+      quota (10 here, against an AWS default of 1,000) can be raised and the
+      request's outcome tracked. support:* cannot serve that second purpose:
+      the Support API requires a paid support plan, while Service Quotas'
+      request history does not. See mootmaker#72.
 
 Resources:
   RegionAllowlistSCP:
