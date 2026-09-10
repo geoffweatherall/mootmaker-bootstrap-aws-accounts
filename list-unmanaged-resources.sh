@@ -85,6 +85,7 @@ aws s3api list-objects-v2 --bucket "${state_bucket}" --query 'Contents[].Key' --
 
 state_count="$(wc -l < "${workdir}/states.txt")"
 : > "${workdir}/managed.txt"
+: > "${workdir}/managed-types.txt"
 
 while read -r key; do
   [[ -n "${key}" ]] || continue
@@ -93,6 +94,12 @@ while read -r key; do
   # different services are enumerated by different things: Lambda by name, ACM by ARN.
   jq -r '[.resources[]?.instances[]?.attributes | (.arn?, .id?)]
          | .[] | select(. != null and . != "")' "${workdir}/state.json" 2>/dev/null >> "${workdir}/managed.txt" || true
+  # Collected here rather than in a second pass: the coverage check below needs the resource TYPES,
+  # and downloading every state file twice to get them doubles the slowest part of this script.
+  # mode=="managed" excludes data sources - aws_iam_policy_document and aws_caller_identity are not
+  # resources, and would otherwise be reported as phantom coverage gaps.
+  jq -r '.resources[]? | select(.mode=="managed") | .type' "${workdir}/state.json" 2>/dev/null \
+    >> "${workdir}/managed-types.txt" || true
 done < "${workdir}/states.txt"
 
 # ---------------------------------------------------------------------------
@@ -131,6 +138,10 @@ echo "Read ${state_count} Terraform state file(s) and ${stack_count} CloudFormat
 # Hand-maintained, and the summary prints the total so an implausibly small number is visible.
 # Adding a service means adding a line here.
 
+# BEGIN-ENUMERATION - the coverage check below parses THIS block for the AWS CLI service names it
+# calls. Deleting a line therefore removes the service from the enumeration AND from the coverage
+# claim, in one edit, which is the only way the two can never disagree. Do not restructure these
+# lines without checking the parse in "Coverage" still finds them.
 {
   aws lambda list-functions --query 'Functions[].FunctionName' --output text 2>/dev/null | tr '\t' '\n' | sed 's/^/lambda\t/'
   aws dynamodb list-tables --query 'TableNames[]' --output text 2>/dev/null | tr '\t' '\n' | sed 's/^/dynamodb-table\t/'
@@ -147,6 +158,7 @@ echo "Read ${state_count} Terraform state file(s) and ${stack_count} CloudFormat
   aws events list-rules --query 'Rules[].Name' --output text 2>/dev/null | tr '\t' '\n' | sed 's/^/eventbridge-rule\t/'
   aws logs describe-log-groups --query 'logGroups[].logGroupName' --output text 2>/dev/null | tr '\t' '\n' | sed 's/^/log-group\t/'
 } | grep -P '^[a-z0-9-]+\t\S' > "${workdir}/live.txt" || true
+# END-ENUMERATION
 
 live_count="$(wc -l < "${workdir}/live.txt")"
 
@@ -211,6 +223,57 @@ while IFS=$'\t' read -r class name; do
   printf '%s\t%s\n' "${class}" "${name}" >> "${workdir}/unmanaged.txt"
 done < "${workdir}/live.txt"
 
+# ---------------------------------------------------------------------------
+# Coverage: does this script know how to look for everything Terraform manages?
+# ---------------------------------------------------------------------------
+#
+# The failure this exists to make visible: a resource type that Terraform manages but this script
+# never enumerates is INVISIBLE, and invisible in the dangerous direction. A managed one is
+# harmless - it was managed anyway. An UNMANAGED one of that type is exactly what the script exists
+# to find, and it is silently absent from the report. "(none)" then says as much about how current
+# the enumeration list is as about the account.
+#
+# Terraform state already names every type it manages, so the script can check its own blind spot
+# rather than being trusted about it. The types were collected during the single pass over state
+# above.
+
+declare -A tf_service_to_cli=(
+  [acm]=acm [appsync]=appsync [cloudfront]=cloudfront [cloudwatch]=logs [cognito]=cognito-idp
+  [dynamodb]=dynamodb [ecr]=ecr [efs]=efs [iam]=iam [kms]=kms [lambda]=lambda [route53]=route53
+  [s3]=s3api [secretsmanager]=secretsmanager [ses]=ses [sns]=sns [sqs]=sqs
+)
+
+# The CLI services this script actually calls, read from the enumeration block above.
+mapfile -t enumerated_cli < <(
+  sed -n '/^# BEGIN-ENUMERATION/,/^# END-ENUMERATION/p' "${BASH_SOURCE[0]}" \
+    | grep -oP '^\s*aws \K[a-z0-9-]+' | sort -u
+)
+
+: > "${workdir}/coverage-gaps.txt"
+while read -r tf_service; do
+  [[ -n "${tf_service}" ]] || continue
+  cli="${tf_service_to_cli[${tf_service}]:-}"
+  if [[ -z "${cli}" ]]; then
+    printf '%s\t%s\n' "${tf_service}" "no CLI mapping in this script - add one to check it" >> "${workdir}/coverage-gaps.txt"
+    continue
+  fi
+  printf '%s\n' "${enumerated_cli[@]+"${enumerated_cli[@]}"}" | grep -qxF "${cli}" && continue
+  printf '%s\t%s\n' "${tf_service}" "managed in Terraform, but 'aws ${cli}' is not enumerated" >> "${workdir}/coverage-gaps.txt"
+done < <(grep '^aws_' "${workdir}/managed-types.txt" \
+           | sed -E 's/^aws_([a-z0-9]+)_.*/\1/;s/^aws_([a-z0-9]+)$/\1/' | sort -u)
+
+echo ""
+echo "## Coverage gaps in this script"
+echo ""
+echo "  Resource types Terraform manages that this script cannot enumerate. An UNMANAGED resource"
+echo "  of one of these types would not appear below - the report would look clean and be wrong."
+echo ""
+if [[ -s "${workdir}/coverage-gaps.txt" ]]; then
+  sort "${workdir}/coverage-gaps.txt" | awk -F'\t' '{printf "  %-18s %s\n", $1, $2}'
+else
+  echo "  (none - every managed type has an enumeration)"
+fi
+
 echo ""
 echo "## Created by AWS, and correctly outside IaC"
 echo ""
@@ -238,7 +301,9 @@ fi
 unmanaged_count="$(wc -l < "${workdir}/unmanaged.txt")"
 echo ""
 aws_created_count="$(wc -l < "${workdir}/aws-created.txt")"
+gap_count="$(wc -l < "${workdir}/coverage-gaps.txt")"
 echo "Summary: ${unmanaged_count} unmanaged, ${aws_created_count} AWS-created, of ${live_count} live resource(s) examined."
+echo "         ${gap_count} coverage gap(s) - types Terraform manages that this script cannot see."
 echo ""
 echo "A total that looks too small means a service is missing from the enumeration list in this"
 echo "script, not that the account is clean - see the header's \"what it does not cover\"."
