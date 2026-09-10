@@ -184,6 +184,9 @@ echo "Read ${state_count} Terraform state file(s) and ${stack_count} CloudFormat
   aws acm list-certificates --query 'CertificateSummaryList[].CertificateArn' --output text 2>/dev/null | tr '\t' '\n' | sed 's/^/acm-certificate\t/'
   aws events list-rules --query 'Rules[].Name' --output text 2>/dev/null | tr '\t' '\n' | sed 's/^/eventbridge-rule\t/'
   aws logs describe-log-groups --query 'logGroups[].logGroupName' --output text 2>/dev/null | tr '\t' '\n' | sed 's/^/log-group\t/'
+  aws cloudwatch describe-alarms --query 'MetricAlarms[].AlarmName' --output text 2>/dev/null | tr '\t' '\n' | sed 's/^/cloudwatch-alarm\t/'
+  aws cloudwatch describe-alarms --query 'CompositeAlarms[].AlarmName' --output text 2>/dev/null | tr '\t' '\n' | sed 's/^/cloudwatch-alarm\t/'
+  aws cloudwatch list-dashboards --query 'DashboardEntries[].DashboardName' --output text 2>/dev/null | tr '\t' '\n' | sed 's/^/cloudwatch-dashboard\t/'
 } | grep -P '^[a-z0-9-]+\t\S' > "${workdir}/live.txt" || true
 # END-ENUMERATION
 
@@ -294,8 +297,19 @@ known_uncheckable=(
                                           'enumerable, but accepted: SES config is small, lives in one repo, and a stray identity costs nothing'
 )
 
+# Terraform's service prefix does not always name one CLI service, so these are checked first.
+# "aws_cloudwatch_*" is the case that exposed it: log groups belong to `aws logs`, EventBridge rules
+# to `aws events`, and alarms and dashboards to `aws cloudwatch`. Mapping the whole prefix to one of
+# them - which is what this script did until alarms were enumerated - quietly claimed coverage of
+# alarms that nothing was looking for. Longest prefix wins, so the specific beats the general.
+tf_type_prefix_to_cli=(
+  'aws_cloudwatch_log_'    'logs'
+  'aws_cloudwatch_event_'  'events'
+  'aws_cloudwatch_'        'cloudwatch'
+)
+
 declare -A tf_service_to_cli=(
-  [acm]=acm [appsync]=appsync [cloudfront]=cloudfront [cloudwatch]=logs [cognito]=cognito-idp
+  [acm]=acm [appsync]=appsync [cloudfront]=cloudfront [cognito]=cognito-idp
   [dynamodb]=dynamodb [ecr]=ecr [efs]=efs [iam]=iam [kms]=kms [lambda]=lambda [route53]=route53
   [s3]=s3api [secretsmanager]=secretsmanager [ses]=ses [sns]=sns [sqs]=sqs
 )
@@ -326,8 +340,14 @@ while read -r tf_type; do
   done
   [[ -n "${matched}" ]] && continue
 
+  cli=""
+  for (( i = 0; i < ${#tf_type_prefix_to_cli[@]}; i += 2 )); do
+    if [[ "${tf_type}" == "${tf_type_prefix_to_cli[i]}"* ]]; then
+      cli="${tf_type_prefix_to_cli[i+1]}"; break
+    fi
+  done
   tf_service="$(sed -E 's/^aws_([a-z0-9]+)_.*/\1/;s/^aws_([a-z0-9]+)$/\1/' <<< "${tf_type}")"
-  cli="${tf_service_to_cli[${tf_service}]:-}"
+  [[ -z "${cli}" ]] && cli="${tf_service_to_cli[${tf_service}]:-}"
   if [[ -z "${cli}" ]]; then
     printf '%s\t%s\n' "${tf_type}" "no CLI mapping in this script - add one, or accept it in known_uncheckable" >> "${workdir}/coverage-gaps.txt"
     continue
