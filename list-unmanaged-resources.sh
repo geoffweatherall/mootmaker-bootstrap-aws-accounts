@@ -273,6 +273,14 @@ known_uncheckable=(
                                           'bucket sub-configuration, not a separate object'
   '^aws_sns_topic_subscription$'          'listable only per topic'
   '^aws_cloudwatch_query_definition$'     'a saved Logs Insights query; carries no cost and cannot be stray'
+
+  # SES, accepted with three different reasons rather than one blanket line, because they are not
+  # equally uncheckable and pretending otherwise would make this list untrustworthy.
+  '^aws_ses_(domain_dkim|domain_identity_verification)$'
+                                          'an attribute of an SES identity, not a separate object'
+  '^aws_ses_receipt_rule$'                'listable only per rule set, not account-wide'
+  '^aws_ses_(domain_identity|receipt_rule_set|active_receipt_rule_set)$'
+                                          'enumerable, but accepted: SES config is small, lives in one repo, and a stray identity costs nothing'
 )
 
 declare -A tf_service_to_cli=(
