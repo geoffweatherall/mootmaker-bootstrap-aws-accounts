@@ -71,7 +71,8 @@ if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
   awk 'NR > 1 && /^[^#]/ { exit } NR > 1 { sub(/^# ?/, ""); print }' "${BASH_SOURCE[0]}"
   echo ""
   echo "Usage: ./list-unmanaged-resources.sh [--verbose]"
-  echo "  --verbose  also print what each managed identifier was matched against"
+  echo "  --verbose  print every accepted limitation with its reason, every AWS-created resource"
+  echo "             on its own row, and what each managed identifier was matched against"
   exit 0
 fi
 
@@ -451,7 +452,17 @@ echo "  Types we looked at and chose not to check, with the reason. On this list
 echo "  than by oversight - which is why they are separated from the gaps above."
 echo ""
 if [[ -s "${workdir}/known-limits.txt" ]]; then
-  sort -u "${workdir}/known-limits.txt" | awk -F'\t' '{printf "  %-46s %s\n", $1, $2}'
+  if (( verbose )); then
+    sort -u "${workdir}/known-limits.txt" | awk -F'\t' '{printf "  %-46s %s\n", $1, $2}'
+  else
+    # Types only, wrapped. The reasons are in known_uncheckable in this script, which is where
+    # someone changing one has to look anyway - printing them on every run is fifteen lines of
+    # justification for a decision nobody is currently questioning. --verbose brings them back.
+    # The trailing echo matters: tr strips every newline including the last, so without it the
+    # next heading runs onto the end of this list.
+    cut -f1 "${workdir}/known-limits.txt" | sort -u | tr '\n' ' ' | fold -s -w 92 | sed 's/^/  /;s/ *$//'
+    echo ""
+  fi
 else
   echo "  (none apply in this account)"
 fi
@@ -463,7 +474,25 @@ echo "  AWS creates these itself and they cannot be declared. Listed rather than
 echo "  inventory stays complete and the classification is visible rather than hidden in a filter."
 echo ""
 if [[ -s "${workdir}/aws-created.txt" ]]; then
-  sort "${workdir}/aws-created.txt" | awk -F'\t' '{printf "  %-18s %-52s %s\n", $1, $2, $3}'
+  if (( verbose )); then
+    sort "${workdir}/aws-created.txt" | awk -F'\t' '{printf "  %-18s %-52s %s\n", $1, $2, $3}'
+  else
+    # Grouped by reason. Eight service-linked roles sharing one explanation is seven repetitions of
+    # that explanation, and the explanation is the part worth reading - the names are only evidence
+    # that it applies to something.
+    first=1
+    while IFS=$'\t' read -r heading names; do
+      (( first )) || echo ""
+      first=0
+      printf '  %s\n' "${heading}"
+      printf '%s\n' "${names}" | fold -s -w 88 | sed 's/^/      /;s/ *$//'
+    done < <(awk -F'\t' '
+      { key = $3 " (" $1 ")"
+        if (!(key in seen)) { order[++n] = key; seen[key] = 1 }
+        names[key] = names[key] (names[key] ? ", " : "") $2 }
+      END { for (i = 1; i <= n; i++) printf "%s\t%s\n", order[i], names[order[i]] }
+    ' "${workdir}/aws-created.txt")
+  fi
 else
   echo "  (none)"
 fi
