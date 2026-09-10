@@ -261,13 +261,18 @@ done < "${workdir}/live.txt"
 # listing for. They are reachable only by first listing their parent and then asking about each one,
 # which is a lot of API calls to detect a stray policy on a bucket that is itself already checked.
 # If one of these ever matters, move it out of this list and enumerate it properly.
+# Flat pairs - pattern, then reason - rather than one packed "pattern|reason" string. A packed
+# string needs a delimiter, and every obvious delimiter is legal inside a regex: "|" is alternation,
+# which silently truncated "^aws_s3_bucket_(public_access_block|...)$" at the first bar and left
+# bash parsing an unmatched "(". Two array slots cannot collide with the content they hold.
 known_uncheckable=(
-  "_policy$|attached to a parent resource; no account-wide listing exists"
-  "_validation$|a Terraform-side wait, not a distinct AWS object"
-  "^aws_route53_record$|listable only per hosted zone, not account-wide"
-  "^aws_s3_bucket_(public_access_block|server_side_encryption_configuration)$|bucket sub-configuration, not a separate object"
-  "^aws_sns_topic_subscription$|listable only per topic"
-  "^aws_cloudwatch_query_definition$|a saved Logs Insights query; carries no cost and cannot be stray"
+  '_policy$'                              'attached to a parent resource; no account-wide listing exists'
+  '_validation$'                          'a Terraform-side wait, not a distinct AWS object'
+  '^aws_route53_record$'                  'listable only per hosted zone, not account-wide'
+  '^aws_s3_bucket_(public_access_block|server_side_encryption_configuration)$'
+                                          'bucket sub-configuration, not a separate object'
+  '^aws_sns_topic_subscription$'          'listable only per topic'
+  '^aws_cloudwatch_query_definition$'     'a saved Logs Insights query; carries no cost and cannot be stray'
 )
 
 declare -A tf_service_to_cli=(
@@ -293,8 +298,8 @@ while read -r tf_type; do
   [[ -n "${tf_type}" ]] || continue
 
   matched=""
-  for entry in "${known_uncheckable[@]}"; do
-    pattern="${entry%%|*}"; reason="${entry#*|}"
+  for (( i = 0; i < ${#known_uncheckable[@]}; i += 2 )); do
+    pattern="${known_uncheckable[i]}"; reason="${known_uncheckable[i+1]}"
     if [[ "${tf_type}" =~ ${pattern} ]]; then
       printf '%s\t%s\n' "${tf_type}" "${reason}" >> "${workdir}/known-limits.txt"
       matched="yes"; break
