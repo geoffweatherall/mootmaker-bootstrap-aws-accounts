@@ -65,7 +65,10 @@ set -euo pipefail
 cd "$(dirname "${BASH_SOURCE[0]}")"
 
 if [[ "${1:-}" == "-h" || "${1:-}" == "--help" ]]; then
-  sed -n '2,36p' "${BASH_SOURCE[0]}" | sed 's/^# \{0,1\}//'
+  # Everything from the shebang to the first line of code, derived rather than a line range: the
+  # header has grown twice already, and a hardcoded range silently truncates the explanation it
+  # exists to print.
+  awk 'NR > 1 && /^[^#]/ { exit } NR > 1 { sub(/^# ?/, ""); print }' "${BASH_SOURCE[0]}"
   echo ""
   echo "Usage: ./list-unmanaged-resources.sh [--verbose]"
   echo "  --verbose  also print what each managed identifier was matched against"
@@ -133,6 +136,14 @@ while read -r stack; do
   aws cloudformation list-stack-resources --stack-name "${stack}" \
     --query 'StackResourceSummaries[].PhysicalResourceId' --output text 2>/dev/null \
     | tr '\t' '\n' | sed '/^$/d' >> "${workdir}/managed.txt" || true
+  # Types as well as identifiers, for the coverage check. Without this, anything managed only in
+  # CloudFormation is invisible to the blind-spot detector - which is how two budgets sat
+  # unenumerated while the coverage section reported nothing missing. AWS::Budgets::Budget becomes
+  # "budgets", matching the CLI service name the enumeration block uses.
+  aws cloudformation list-stack-resources --stack-name "${stack}" \
+    --query 'StackResourceSummaries[].ResourceType' --output text 2>/dev/null \
+    | tr '\t' '\n' | sed '/^$/d' | sed -E 's|^AWS::([A-Za-z0-9]+)::.*|cfn_\L\1|' \
+    >> "${workdir}/managed-types.txt" || true
 done <<< "${stacks}"
 
 # An ARN's last segment is the bare name a service's own list call returns, so both forms are
@@ -232,7 +243,7 @@ while IFS=$'\t' read -r class name; do
   if grep -qxF "${name}" "${workdir}/managed-index.txt" \
      || grep -qxF "${name##*/}" "${workdir}/managed-index.txt" \
      || grep -qxF "${name##*:}" "${workdir}/managed-index.txt"; then
-    (( verbose )) && echo "  managed: ${class} ${name}"
+    if (( verbose )); then echo "  managed: ${class} ${name}"; fi
     continue
   fi
 
@@ -325,6 +336,58 @@ while read -r tf_type; do
   printf '%s\t%s\n' "${tf_type}" "'aws ${cli}' is not enumerated by this script" >> "${workdir}/coverage-gaps.txt"
 done < <(grep '^aws_' "${workdir}/managed-types.txt" | sort -u)
 
+# ---------------------------------------------------------------------------
+# Coverage, second source: what could exist at all
+# ---------------------------------------------------------------------------
+#
+# The check above asks "is everything IaC MANAGES enumerable?". That misses a whole class: a
+# service nobody has used yet is absent from state, so a hand-made resource in it would be
+# invisible AND unreported. This asks the wider question - "what could anyone create here?" - by
+# reading the permissions of the role this script is running as.
+#
+# Skipped silently if the role cannot read its own policy: the answer is a bonus, not a
+# prerequisite, and a permissions check that fails closed would make the script unusable under a
+# tighter role than the one it was written for.
+
+: > "${workdir}/perm-gaps.txt"
+role_name="$(aws sts get-caller-identity --query Arn --output text 2>/dev/null \
+  | sed -nE 's|.*assumed-role/([^/]+)/.*|\1|p')"
+
+if [[ -n "${role_name}" ]]; then
+  # Services this role can act on broadly enough to CREATE something. "s3:*" counts; "kms:Decrypt"
+  # and "organizations:List*" do not - they permit use or inspection, not creation.
+  { aws iam list-role-policies --role-name "${role_name}" --query 'PolicyNames[]' --output text 2>/dev/null \
+      | tr '\t' '\n' | sed '/^$/d' | while read -r pol; do
+          aws iam get-role-policy --role-name "${role_name}" --policy-name "${pol}" \
+            --query 'PolicyDocument' --output json 2>/dev/null
+        done
+  } | jq -r '.Statement[]? | select(.Effect=="Allow") | .Action | if type=="array" then .[] else . end' 2>/dev/null \
+    | grep -E ':\*$' | cut -d: -f1 | sort -u > "${workdir}/creatable.txt" || true
+
+  # Services with no resources to strand, or whose "resources" are this script's own inputs.
+  not_resource_bearing='^(sts|ce|health|support|trustedadvisor|organizations|servicequotas|cloudformation|budgets)$'
+
+  # Services accepted for THIS check specifically, listed separately from known_uncheckable rather
+  # than inferred from it. Inferring was a bug: testing "does any accepted TYPE start with
+  # aws_<service>" made one accepted type speak for its whole service, so accepting
+  # aws_cloudwatch_query_definition silently accepted CloudWatch alarms too - a resource that can be
+  # created by hand, costs money, and would never have been reported. A service is only accepted
+  # here if someone wrote it here.
+  accepted_services='^(ses)$'
+
+  while read -r svc; do
+    [[ -n "${svc}" ]] || continue
+    [[ "${svc}" =~ ${not_resource_bearing} ]] && continue
+    cli="${svc}"; [[ "${svc}" == "s3" ]] && cli="s3api"
+    printf '%s\n' "${enumerated_cli[@]+"${enumerated_cli[@]}"}" | grep -qxF "${cli}" && continue
+    [[ "${svc}" =~ ${accepted_services} ]] && continue
+    # Already named by the type-level check above; no need to say it twice.
+    grep -q "^aws_${svc}_" "${workdir}/coverage-gaps.txt" 2>/dev/null && continue
+    printf '%s\t%s\n' "${svc}" "this role can create ${svc} resources, and nothing here enumerates them" \
+      >> "${workdir}/perm-gaps.txt"
+  done < "${workdir}/creatable.txt"
+fi
+
 echo ""
 echo "==============================================================================="
 echo " NEEDS ATTENTION"
@@ -349,8 +412,9 @@ echo "  Types Terraform manages that this script cannot see, and that are NOT on
 echo "  below. An unmanaged resource of one of these types would not appear above - the report would"
 echo "  look clean and be wrong. Either enumerate it, or accept it into known_uncheckable with a reason."
 echo ""
-if [[ -s "${workdir}/coverage-gaps.txt" ]]; then
-  sort -u "${workdir}/coverage-gaps.txt" | awk -F'\t' '{printf "  %-46s %s\n", $1, $2}'
+if [[ -s "${workdir}/coverage-gaps.txt" || -s "${workdir}/perm-gaps.txt" ]]; then
+  sort -u "${workdir}/coverage-gaps.txt" "${workdir}/perm-gaps.txt" 2>/dev/null \
+    | awk -F'\t' 'NF {printf "  %-46s %s\n", $1, $2}'
 else
   echo "  (none)"
 fi
@@ -388,7 +452,7 @@ echo ""
 unmanaged_count="$(wc -l < "${workdir}/unmanaged.txt")"
 echo ""
 aws_created_count="$(wc -l < "${workdir}/aws-created.txt")"
-gap_count="$(sort -u "${workdir}/coverage-gaps.txt" | wc -l)"
+gap_count="$(sort -u "${workdir}/coverage-gaps.txt" "${workdir}/perm-gaps.txt" 2>/dev/null | grep -c . || true)"
 known_count="$(sort -u "${workdir}/known-limits.txt" | wc -l)"
 echo "==============================================================================="
 if (( unmanaged_count == 0 && gap_count == 0 )); then
