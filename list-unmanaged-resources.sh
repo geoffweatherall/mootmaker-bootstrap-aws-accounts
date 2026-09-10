@@ -26,6 +26,22 @@
 # run - and a report with permanent false positives is one people stop reading, which is the exact
 # problem it was written to solve.
 #
+# FOUR OUTCOMES, SPLIT INTO TWO HALVES. The report separates what needs a decision from what does
+# not, because a list nobody can triage at a glance is a list nobody reads:
+#
+#   NEEDS ATTENTION  unmanaged resources          - live, and no IaC claims them
+#                    undecided coverage gaps      - types this script cannot see and nobody has
+#                                                   ruled on. The dangerous one: an unmanaged
+#                                                   resource of such a type is silently absent
+#                                                   from the section above it.
+#   NORMAL           accepted coverage limits     - types we looked at and chose not to check
+#                    created by AWS               - cannot be declared even in principle
+#
+# The distinction between the two middle rows is the whole reason they are separate sections: both
+# are things the script cannot see, but one has been reasoned about and the other has not. Collapse
+# them and every run reports the same seven sub-resource types forever, which trains the reader to
+# skip the section that also carries the genuine finding.
+#
 # THREE OUTCOMES, NOT TWO. A resource missing from IaC is not automatically a problem: AWS creates
 # some resources itself, and they cannot be declared even in principle. Those are reported in their
 # own section rather than silently filtered, so the account's inventory stays complete and a reader
@@ -237,6 +253,23 @@ done < "${workdir}/live.txt"
 # rather than being trusted about it. The types were collected during the single pass over state
 # above.
 
+# Types we have LOOKED AT and decided not to check, with the reason. Being on this list is a
+# decision, not an oversight, and that is the whole point of separating it from the gaps below: a
+# reader can tell "we thought about this" from "nobody has looked yet".
+#
+# Most are sub-resources - a policy, a validation, a bucket setting - which AWS has no account-wide
+# listing for. They are reachable only by first listing their parent and then asking about each one,
+# which is a lot of API calls to detect a stray policy on a bucket that is itself already checked.
+# If one of these ever matters, move it out of this list and enumerate it properly.
+known_uncheckable=(
+  "_policy$|attached to a parent resource; no account-wide listing exists"
+  "_validation$|a Terraform-side wait, not a distinct AWS object"
+  "^aws_route53_record$|listable only per hosted zone, not account-wide"
+  "^aws_s3_bucket_(public_access_block|server_side_encryption_configuration)$|bucket sub-configuration, not a separate object"
+  "^aws_sns_topic_subscription$|listable only per topic"
+  "^aws_cloudwatch_query_definition$|a saved Logs Insights query; carries no cost and cannot be stray"
+)
+
 declare -A tf_service_to_cli=(
   [acm]=acm [appsync]=appsync [cloudfront]=cloudfront [cloudwatch]=logs [cognito]=cognito-idp
   [dynamodb]=dynamodb [ecr]=ecr [efs]=efs [iam]=iam [kms]=kms [lambda]=lambda [route53]=route53
@@ -250,35 +283,87 @@ mapfile -t enumerated_cli < <(
 )
 
 : > "${workdir}/coverage-gaps.txt"
-while read -r tf_service; do
-  [[ -n "${tf_service}" ]] || continue
+: > "${workdir}/known-limits.txt"
+
+# Checked at TYPE level, not service level, because those differ in a way that matters: the script
+# lists s3 BUCKETS, so aws_s3_bucket_policy would count as covered by a service-level test while
+# nothing actually looks for a stray bucket policy. Known limitations are matched first, so a type
+# we have already reasoned about never turns up as a fresh gap.
+while read -r tf_type; do
+  [[ -n "${tf_type}" ]] || continue
+
+  matched=""
+  for entry in "${known_uncheckable[@]}"; do
+    pattern="${entry%%|*}"; reason="${entry#*|}"
+    if [[ "${tf_type}" =~ ${pattern} ]]; then
+      printf '%s\t%s\n' "${tf_type}" "${reason}" >> "${workdir}/known-limits.txt"
+      matched="yes"; break
+    fi
+  done
+  [[ -n "${matched}" ]] && continue
+
+  tf_service="$(sed -E 's/^aws_([a-z0-9]+)_.*/\1/;s/^aws_([a-z0-9]+)$/\1/' <<< "${tf_type}")"
   cli="${tf_service_to_cli[${tf_service}]:-}"
   if [[ -z "${cli}" ]]; then
-    printf '%s\t%s\n' "${tf_service}" "no CLI mapping in this script - add one to check it" >> "${workdir}/coverage-gaps.txt"
+    printf '%s\t%s\n' "${tf_type}" "no CLI mapping in this script - add one, or accept it in known_uncheckable" >> "${workdir}/coverage-gaps.txt"
     continue
   fi
   printf '%s\n' "${enumerated_cli[@]+"${enumerated_cli[@]}"}" | grep -qxF "${cli}" && continue
-  printf '%s\t%s\n' "${tf_service}" "managed in Terraform, but 'aws ${cli}' is not enumerated" >> "${workdir}/coverage-gaps.txt"
-done < <(grep '^aws_' "${workdir}/managed-types.txt" \
-           | sed -E 's/^aws_([a-z0-9]+)_.*/\1/;s/^aws_([a-z0-9]+)$/\1/' | sort -u)
+  printf '%s\t%s\n' "${tf_type}" "'aws ${cli}' is not enumerated by this script" >> "${workdir}/coverage-gaps.txt"
+done < <(grep '^aws_' "${workdir}/managed-types.txt" | sort -u)
 
 echo ""
-echo "## Coverage gaps in this script"
+echo "==============================================================================="
+echo " NEEDS ATTENTION"
+echo "==============================================================================="
+
 echo ""
-echo "  Resource types Terraform manages that this script cannot enumerate. An UNMANAGED resource"
-echo "  of one of these types would not appear below - the report would look clean and be wrong."
+echo "## Unmanaged resources"
+echo ""
+echo "  Live in this account, claimed by no Terraform state and no CloudFormation stack."
+echo "  Either genuinely stray, or something that ought to be brought under IaC."
+echo ""
+if [[ -s "${workdir}/unmanaged.txt" ]]; then
+  sort "${workdir}/unmanaged.txt" | awk -F'\t' '{printf "  %-18s %s\n", $1, $2}'
+else
+  echo "  (none)"
+fi
+
+echo ""
+echo "## Coverage gaps nobody has decided about yet"
+echo ""
+echo "  Types Terraform manages that this script cannot see, and that are NOT on the accepted list"
+echo "  below. An unmanaged resource of one of these types would not appear above - the report would"
+echo "  look clean and be wrong. Either enumerate it, or accept it into known_uncheckable with a reason."
 echo ""
 if [[ -s "${workdir}/coverage-gaps.txt" ]]; then
-  sort "${workdir}/coverage-gaps.txt" | awk -F'\t' '{printf "  %-18s %s\n", $1, $2}'
+  sort -u "${workdir}/coverage-gaps.txt" | awk -F'\t' '{printf "  %-46s %s\n", $1, $2}'
 else
-  echo "  (none - every managed type has an enumeration)"
+  echo "  (none)"
+fi
+
+echo ""
+echo "==============================================================================="
+echo " NORMAL - reported for completeness, no action needed"
+echo "==============================================================================="
+
+echo ""
+echo "## Accepted coverage limitations"
+echo ""
+echo "  Types we looked at and chose not to check, with the reason. On this list by decision rather"
+echo "  than by oversight - which is why they are separated from the gaps above."
+echo ""
+if [[ -s "${workdir}/known-limits.txt" ]]; then
+  sort -u "${workdir}/known-limits.txt" | awk -F'\t' '{printf "  %-46s %s\n", $1, $2}'
+else
+  echo "  (none apply in this account)"
 fi
 
 echo ""
 echo "## Created by AWS, and correctly outside IaC"
 echo ""
-echo "  Legitimately present, and not a gap: AWS creates these itself and they cannot be declared."
-echo "  Listed rather than filtered, so the inventory stays complete and the classification is visible."
+echo "  AWS creates these itself and they cannot be declared. Listed rather than filtered, so the"
+echo "  inventory stays complete and the classification is visible rather than hidden in a filter."
 echo ""
 if [[ -s "${workdir}/aws-created.txt" ]]; then
   sort "${workdir}/aws-created.txt" | awk -F'\t' '{printf "  %-18s %-52s %s\n", $1, $2, $3}'
@@ -287,23 +372,19 @@ else
 fi
 
 echo ""
-echo "## Unmanaged resources"
-echo ""
-echo "  Live in this account, claimed by no Terraform state and no CloudFormation stack."
-echo "  Either genuinely stray, or something that ought to be brought under IaC. Reported, never deleted."
-echo ""
-if [[ -s "${workdir}/unmanaged.txt" ]]; then
-  sort "${workdir}/unmanaged.txt" | awk -F'\t' '{printf "  %-18s %s\n", $1, $2}'
-else
-  echo "  (none)"
-fi
-
 unmanaged_count="$(wc -l < "${workdir}/unmanaged.txt")"
 echo ""
 aws_created_count="$(wc -l < "${workdir}/aws-created.txt")"
-gap_count="$(wc -l < "${workdir}/coverage-gaps.txt")"
-echo "Summary: ${unmanaged_count} unmanaged, ${aws_created_count} AWS-created, of ${live_count} live resource(s) examined."
-echo "         ${gap_count} coverage gap(s) - types Terraform manages that this script cannot see."
+gap_count="$(sort -u "${workdir}/coverage-gaps.txt" | wc -l)"
+known_count="$(sort -u "${workdir}/known-limits.txt" | wc -l)"
+echo "==============================================================================="
+if (( unmanaged_count == 0 && gap_count == 0 )); then
+  echo " Nothing needs attention."
+else
+  echo " NEEDS ATTENTION: ${unmanaged_count} unmanaged resource(s), ${gap_count} undecided coverage gap(s)."
+fi
+echo " Normal: ${known_count} accepted limitation(s), ${aws_created_count} AWS-created, of ${live_count} live resource(s) examined."
+echo "==============================================================================="
 echo ""
 echo "A total that looks too small means a service is missing from the enumeration list in this"
 echo "script, not that the account is clean - see the header's \"what it does not cover\"."
