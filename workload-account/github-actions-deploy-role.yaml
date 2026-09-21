@@ -329,6 +329,15 @@ Resources:
                   - lambda:GetFunctionConfiguration
                   - lambda:GetFunctionCodeSigningConfig
                   - lambda:GetFunctionConcurrency
+                  # Terraform's aws_lambda_function_recursion_config, this is not - it's
+                  # reserved_concurrent_executions on aws_lambda_function itself, which Terraform
+                  # manages via these two calls (set a value / unset back to unreserved). Missing
+                  # this failed the first deploy of mootmaker-demo-data#27's reserved-concurrency-1
+                  # change with an AccessDeniedException, after every ephemeral proving run passed -
+                  # `terraform plan` doesn't call this API, only `apply` does, and no ephemeral
+                  # environment exercises this Lambda's concurrency setting. Added 2026-09-21.
+                  - lambda:PutFunctionConcurrency
+                  - lambda:DeleteFunctionConcurrency
                   - lambda:GetRuntimeManagementConfig
                   # Not a Terraform action: the acceptance suites invoke database-reset directly
                   # with AWS credentials to reset an environment before each test (see
