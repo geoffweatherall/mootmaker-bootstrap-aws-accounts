@@ -10,7 +10,7 @@ configured - not from the management account. Two independent templates:
   account's monthly cost is forecasted or actually exceeds a low and a
   high threshold.
 - `github-actions-deploy-role.yaml` - the GitHub Actions OIDC provider and deploy
-  role [mootmaker/designs/ci-cd-pipeline.md](https://github.com/geoffweatherall/mootmaker/blob/main/designs/ci-cd-pipeline.md)'s
+  role [mootmaker/designs/archive/ci-cd-pipeline.md](https://github.com/geoffweatherall/mootmaker/blob/main/designs/archive/ci-cd-pipeline.md)'s
   release pipeline assumes to deploy `test`/`production` - no long-lived AWS
   credential is ever stored in GitHub.
 
@@ -95,7 +95,7 @@ writing this) and one deploy role, `mootmaker-release-github-actions-deploy`.
 reusable-workflow files (`mootmaker-api`/`mootmaker-webapp`/`mootmaker-demo-data`'s
 `release-build.yml`, at a `refs/tags/v*` ref; `mootmaker-release`'s own `release.yml`, at
 `refs/heads/main`) can assume this role. None of those workflow files exist yet - see
-[mootmaker/designs/ci-cd-pipeline.md](https://github.com/geoffweatherall/mootmaker/blob/main/designs/ci-cd-pipeline.md),
+[mootmaker/designs/archive/ci-cd-pipeline.md](https://github.com/geoffweatherall/mootmaker/blob/main/designs/archive/ci-cd-pipeline.md),
 still `Drafting`. Applying this stack ahead of those files existing is safe (nothing can assume a
 role whose trust condition nothing yet matches); it just means the deploy role sits unused until
 the pipeline is actually built.
