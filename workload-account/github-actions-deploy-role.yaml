@@ -1,4 +1,4 @@
-# GitHub Actions OIDC provider + a deploy role for mootmaker/designs/ci-cd-pipeline.md's release
+# GitHub Actions OIDC provider + a deploy role for mootmaker/designs/archive/ci-cd-pipeline.md's release
 # pipeline. No long-lived AWS credential is ever stored in GitHub - a workflow run exchanges a
 # short-lived GitHub-issued OIDC token for temporary credentials by assuming this role. Deploy in
 # the workload account (431071856068). Requires CAPABILITY_NAMED_IAM.
@@ -19,7 +19,7 @@
 #
 # The compensating controls are therefore the ref patterns (components only at refs/tags/v*, the
 # orchestrator and the sweep only at refs/heads/main) plus branch protection on those repos - not
-# workflow-file identity. See mootmaker/designs/ci-cd-pipeline.md Decision 3 and OQ-4/OQ-3 (a
+# workflow-file identity. See mootmaker/designs/archive/ci-cd-pipeline.md Decision 3 and OQ-4/OQ-3 (a
 # fine-grained PAT, not this role, is what's exposed to a plain PR).
 #
 # The permission policy below is scoped to the AWS resource types
@@ -34,7 +34,7 @@
 AWSTemplateFormatVersion: '2010-09-09'
 Description: >-
   GitHub Actions OIDC provider + deploy role for mootmaker's release pipeline (see
-  mootmaker/designs/ci-cd-pipeline.md). Deploy in the workload account. Requires
+  mootmaker/designs/archive/ci-cd-pipeline.md). Deploy in the workload account. Requires
   CAPABILITY_NAMED_IAM. See this file's own header comment for the full reasoning.
 
 Parameters:
@@ -65,7 +65,7 @@ Parameters:
   pMootmakerReleaseRepo:
     Type: String
     Default: geoffweatherall@1743794/mootmaker-release@1355335355
-  # The scheduled ephemeral sweep (mootmaker/designs/ci-cd-pipeline.md rollout step 11) runs from
+  # The scheduled ephemeral sweep (mootmaker/designs/archive/ci-cd-pipeline.md rollout step 11) runs from
   # this repo, on a cron from main. It is not part of a release - it tears down environments a
   # release left behind - so it needs its own entry rather than borrowing one of the four above.
   # This is the repo that was renamed from mootmaker-test-infra on 2026-09-03, which is exactly the
