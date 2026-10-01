@@ -261,6 +261,54 @@ Resources:
 
         # mootmaker-api: AppSync + Cognito + DynamoDB + the Lambdas behind AppSync's resolvers and
         # database-reset/database-repair, plus their IAM exec roles.
+        # mootmaker-api's avatars bucket (avatars.tf: <environment>-mootmaker-avatars-<account-id>),
+        # added with API-owned avatar uploads (mootmaker-api's person-avatar-upload-refactor). Same
+        # shape as the webapp's SiteBucket above, plus the lifecycle rule that expires abandoned
+        # uploads. Its CloudFront distribution, certificate and DNS records are already covered by
+        # WebappHosting's CloudFrontAndAcm and Route 53 statements. Added 2026-10-01, after the
+        # first release carrying avatars failed in build-api with AccessDenied on s3:CreateBucket.
+        - PolicyName: ApiAvatarsBucket
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              - Sid: AvatarsBucket
+                Effect: Allow
+                Action:
+                  - s3:CreateBucket
+                  - s3:DeleteBucket
+                  - s3:GetBucketPolicy
+                  - s3:PutBucketPolicy
+                  - s3:DeleteBucketPolicy
+                  - s3:GetBucketPublicAccessBlock
+                  - s3:PutBucketPublicAccessBlock
+                  - s3:GetLifecycleConfiguration
+                  - s3:PutLifecycleConfiguration
+                  - s3:GetObject
+                  - s3:PutObject
+                  - s3:DeleteObject
+                  - s3:ListBucket
+                  # Read-only drift detection on refresh, and version enumeration so destroy can
+                  # empty the bucket - the same reasons as SiteBucket's identical entries.
+                  - s3:GetBucketAcl
+                  - s3:GetBucketCORS
+                  - s3:GetBucketLocation
+                  - s3:GetBucketLogging
+                  - s3:GetBucketNotification
+                  - s3:GetBucketObjectLockConfiguration
+                  - s3:GetBucketOwnershipControls
+                  - s3:GetBucketRequestPayment
+                  - s3:GetBucketTagging
+                  - s3:GetBucketVersioning
+                  - s3:GetBucketWebsite
+                  - s3:GetAccelerateConfiguration
+                  - s3:GetEncryptionConfiguration
+                  - s3:GetReplicationConfiguration
+                  - s3:ListBucketVersions
+                  - s3:DeleteObjectVersion
+                Resource:
+                  - !Sub "arn:aws:s3:::*-mootmaker-avatars-${pAccountId}"
+                  - !Sub "arn:aws:s3:::*-mootmaker-avatars-${pAccountId}/*"
+
         - PolicyName: ApiCore
           PolicyDocument:
             Version: "2012-10-17"
