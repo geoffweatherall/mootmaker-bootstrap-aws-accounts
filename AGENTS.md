@@ -15,6 +15,12 @@ policies, IAM Identity Center for keyless access, billing alerts, and access-key
   Weakening a guardrail to make something work is almost always the wrong fix.
 - **Getting this wrong can lock you out of your own account.** Read what a policy does before
   applying it, and know how you would recover.
+- **Stacks are applied with `./deploy-stack.sh`** (see README.md). Run without a terminal, it
+  previews a change set and deletes it - agents can use it to show what a change would do.
+- **Agents never run `management-account/with-management-credentials.sh`**, never call
+  `aws sso get-role-credentials`, and never change `management-access.yaml`'s stack. Prepare the
+  exact command for Geoff to run instead. Management write access is deliberately on a separate
+  Identity Center user that the everyday session cannot reach.
 
 ---
 
