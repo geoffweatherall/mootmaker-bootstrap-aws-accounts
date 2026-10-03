@@ -8,7 +8,7 @@ Description: >-
   management account, in Identity Center's home region (us-east-1), as root,
   in the console: this stack is deliberately outside what the stack operator
   can change (see the "management-access.yaml" section of this directory's
-  README). Design: mootmaker/designs/cloudformation-from-cli-via-sso.md.
+  README). Design: mootmaker/designs/archive/cloudformation-from-cli-via-sso.md.
 
 Parameters:
   pInstanceArn:
