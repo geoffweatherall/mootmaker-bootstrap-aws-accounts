@@ -2,7 +2,7 @@
 
 CloudFormation for **member/workload accounts** (this account: 431071856068,
 and any future ones). Deploy these from *inside* the account being
-configured - not from the management account. Two independent templates:
+configured - not from the management account. Three independent templates:
 
 - `credential-rotation.yaml` - a scheduled Lambda that force-deactivates
   IAM access keys past a configurable age.
@@ -30,21 +30,24 @@ last IAM user in this account.
 
 ## Deploying
 
-Open CloudFormation in 431071856068, **Create stack** > upload the
-template. Name the stack after the template filename (e.g.
-`credential-rotation`, `billing-alert`) - the convention this project uses
-for every stack, so it's obvious at a glance which template deployed which
-stack. `credential-rotation.yaml` creates named IAM resources, so the
-console will ask you to acknowledge **"I acknowledge that AWS
-CloudFormation might create IAM resources with custom names"**
-(`CAPABILITY_NAMED_IAM`) - that's expected. `billing-alert.yaml` needs no
-capability acknowledgement.
+From the repo root, with your everyday SSO session:
+
+```bash
+./deploy-stack.sh workload-account/credential-rotation.yaml
+```
+
+That creates the stack if it doesn't exist, or previews and applies an update
+if it does - see the root README's [Applying stacks](../README.md#applying-stacks).
+The stack is named after the template file (e.g. `credential-rotation`), the
+convention this project uses for every stack. Capabilities such as
+`CAPABILITY_NAMED_IAM` (needed by `credential-rotation.yaml` and
+`github-actions-deploy-role.yaml`, which create named IAM resources) are
+detected from the template automatically.
 
 `cloudformation:*` is included in both the service-allowlist SCP
 (`../management-account/scp-guardrails.yaml`) and the IAM Identity Center
 permission set (`../management-account/identity-center.yaml`), so a normal
-Identity Center session can manage stacks here - root isn't required for
-this, only for changes to the management-account stacks themselves.
+Identity Center session can manage stacks here - root isn't required.
 
 ## credential-rotation.yaml
 

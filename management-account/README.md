@@ -6,7 +6,7 @@ regions and services member accounts can use - restrictions that member
 account admins cannot remove, because SCPs live outside the account they
 restrict and are only editable from here.
 
-Three independent templates:
+Four independent templates:
 
 - `scp-guardrails.yaml` - the region/service allow-list SCPs.
 - `billing-alert.yaml` - an AWS Budget that emails an alert on any
@@ -14,6 +14,22 @@ Three independent templates:
 - `identity-center.yaml` - an IAM Identity Center admin group, permission
   set, and account assignment, so day-to-day work uses short-lived SSO
   sessions instead of a long-lived IAM user access key.
+- `management-access.yaml` - the narrow SSO access that applies the three
+  stacks above from the command line, plus billing read-only. The one stack
+  here that root still applies in the console - see
+  [below](#management-accessyaml).
+
+**Applying changes:** after first creation, the first three stacks are updated
+from the command line, not the console - see the root README's
+[Applying stacks](../README.md#applying-stacks):
+
+```bash
+management-account/with-management-credentials.sh ./deploy-stack.sh management-account/scp-guardrails.yaml
+```
+
+The console steps below are kept for creating a stack from scratch (e.g.
+rebuilding the account), which needs root because the CLI access itself
+depends on these stacks existing.
 
 ## Prerequisites (should already be true)
 
@@ -54,7 +70,7 @@ never restrict the account they're managed from, only member accounts.
 That's intentional; it's what keeps this guardrail out of reach of the
 member account's admin user even if their credentials leak.
 
-## Deploying scp-guardrails.yaml
+## Creating scp-guardrails.yaml from scratch
 
 1. Log in to **339140804537** as the **root user** (console).
 2. Go to **CloudFormation** (any region - `us-east-1` is fine;
@@ -87,7 +103,7 @@ meant to hold no workloads and no IAM users (see
 [../workload-account/README.md](../workload-account/README.md)'s admin
 guardrail for why), so this isn't cost management, it's a tripwire: any
 recorded cost here at all means something exists in this account that
-shouldn't. Deploy the same way as `scp-guardrails.yaml` above - no IAM
+shouldn't. Create it the same way as `scp-guardrails.yaml` above - no IAM
 capability needed, this template doesn't touch IAM either. **Free**: this
 is the only budget in this account, well under the free-2-per-account
 limit.
@@ -137,7 +153,7 @@ once, by hand, from the management account:
 You should now have three values: **Instance ARN**, **Identity store ID**,
 **your User ID**.
 
-### Deploying identity-center.yaml
+### Creating identity-center.yaml from scratch
 
 1. Still logged in to **339140804537** as root, in the **same Region** you
    enabled Identity Center in (step 3 above).
@@ -174,6 +190,82 @@ access paths are Identity Center and the AWS account root user. If
 Identity Center is ever unreachable, root login (console) is the fallback
 - there is no faster middle-ground path, and that's an accepted
 trade-off in exchange for one fewer standing identity in the account.
+
+Root is also still needed, deliberately, for anything that changes who can
+get into *this* account: `management-access.yaml` and console-only Identity
+Center settings. Routine updates to the other three stacks are not root work
+any more.
+
+## management-access.yaml
+
+Lets the other three stacks be updated from the command line through IAM
+Identity Center, and lets Claude read the organization's bill. Design and
+reasoning: [mootmaker/designs/cloudformation-from-cli-via-sso.md](https://github.com/geoffweatherall/mootmaker/blob/main/designs/cloudformation-from-cli-via-sso.md).
+
+| Resource | What it is |
+|---|---|
+| `ManagementStackOperator` permission set | Assigned **only** to the dedicated management user (`geoff-management`). Can create, preview and execute change sets on `scp-guardrails`, `billing-alert` and `identity-center` - nothing else - plus read what they manage. Has no Organizations/Identity Center/Budgets write of its own. One-hour credentials. |
+| `mootmaker-management-cloudformation` IAM role | The CloudFormation service role that actually makes those stacks' changes. Only CloudFormation can assume it, and the operator can pass only this role. Explicitly denied from creating/removing assignments or provisioning anything in this account, and from touching either permission set in this stack - so no stack it runs can change access to the management account. |
+| `ManagementBillingReadOnly` permission set | Assigned to your everyday user. Cost Explorer, Budgets, Free Tier usage, bills and invoices - read only. Not payment methods, tax, or account contact details (why it's not `AWSBillingReadOnlyAccess`). |
+
+**Why a separate user for the operator:** an Identity Center access token can
+get role credentials for every account and permission set its *user* is
+assigned. If your everyday user held the operator, the token your everyday
+`aws sso login` caches would be one API call away from management write
+access. On a separate user, it simply can't reach it.
+
+**Why root applies this stack:** whoever can edit permission sets can grant
+themselves anything. Keeping this stack out of the operator's reach (it has an
+explicit deny on it, and `deploy-stack.sh` refuses it too) means changing
+management-account access always needs root.
+
+### Creating it (root, console, one-time)
+
+Before the stack, in **IAM Identity Center** (management account, `us-east-1`):
+
+1. **Settings > Authentication > Session settings**: set the session duration
+   to **24 hours**. It applies to every user and account - there is no
+   per-account setting - which is why the management user's one-hour limit
+   comes from `with-management-credentials.sh` instead.
+2. **Users > Add user**: username `geoff-management`, email
+   `geoff.weatherall+mootmaker-management@gmail.com` (Identity Center needs
+   each user's email to be unique; the plus-address still reaches the same
+   inbox). In a **private window**, accept the invitation, set a password,
+   and register MFA as a new entry in your existing authenticator app. Copy
+   the user's **User ID** (General tab) - this is `pOperatorUserId`.
+
+And, as root, under **Account** (top-right menu > Account): **IAM user and
+role access to Billing information** > **Edit** > **Activate IAM Access**.
+Without it, roles in this account can't see the Billing console even with
+permission.
+
+Then **CloudFormation** (`us-east-1`) > **Create stack** > upload
+`management-access.yaml`, stack name `management-access`:
+
+- `pInstanceArn` - same value as the `identity-center` stack's.
+- `pOperatorUserId` - `geoff-management`'s User ID from step 2.
+- `pBillingUserId` - your everyday user's (`geoff.weatherall`) ID, same as
+  the `identity-center` stack's `pAdminUserId`.
+- Tick **I acknowledge that AWS CloudFormation might create IAM resources
+  with custom names** (`CAPABILITY_NAMED_IAM` - it creates the service role).
+
+Check the two user IDs before creating the stack. Swapping them gives your
+everyday user the operator role - exactly what the separate user exists to
+prevent - and the only symptom is a `ForbiddenException: No access` from the
+helper. Afterwards, **IAM Identity Center > AWS accounts > 339140804537 >
+Users and groups** should show `geoff-management` with
+`ManagementStackOperator` and `geoff.weatherall` with
+`ManagementBillingReadOnly`.
+
+### After creating it
+
+1. Add the `mootmaker-billing` profile to `~/.aws/config` (see the root
+   README).
+2. Check the operator works: `management-account/with-management-credentials.sh aws sts get-caller-identity`
+   should print an `AWSReservedSSO_ManagementStackOperator_...` ARN in
+   339140804537.
+3. Run `deploy-stack.sh` for each of the three stacks. The first run attaches
+   the service role to that stack, and should show no resource changes.
 
 ## Verifying
 

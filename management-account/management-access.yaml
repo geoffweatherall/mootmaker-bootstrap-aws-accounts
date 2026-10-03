@@ -1,0 +1,318 @@
+AWSTemplateFormatVersion: '2010-09-09'
+Description: >-
+  Command-line access to the Organizations management account (339140804537)
+  through IAM Identity Center, replacing root console logins for routine
+  stack updates. Two permission sets - a stack operator that can change the
+  three other management stacks only through a CloudFormation service role,
+  and a billing read-only set - plus that service role. Deploy in the
+  management account, in Identity Center's home region (us-east-1), as root,
+  in the console: this stack is deliberately outside what the stack operator
+  can change (see the "management-access.yaml" section of this directory's
+  README). Design: mootmaker/designs/cloudformation-from-cli-via-sso.md.
+
+Parameters:
+  pInstanceArn:
+    Type: String
+    Description: >-
+      ARN of the IAM Identity Center instance - the same value as
+      identity-center.yaml's pInstanceArn.
+
+  pOperatorUserId:
+    Type: String
+    Description: >-
+      Identity Store User ID of the dedicated management user (geoff-management),
+      the only user assigned ManagementStackOperator. Not your everyday user: an
+      SSO token can reach every assignment its user has, so keeping this on a
+      separate user is what keeps management write access out of reach of the
+      everyday token.
+
+  pBillingUserId:
+    Type: String
+    Description: >-
+      Identity Store User ID of the everyday user, assigned
+      ManagementBillingReadOnly - the same value as identity-center.yaml's
+      pAdminUserId.
+
+  pManagementAccountId:
+    Type: String
+    Default: "339140804537"
+    Description: This account. Used for assignments, stack ARNs and the access-change deny.
+
+Resources:
+  # Every management-stack change the operator makes is carried out by this
+  # role, not by the operator's own credentials - the operator itself has no
+  # organizations/sso/identitystore/budgets write. Only CloudFormation can
+  # assume it.
+  CloudFormationServiceRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: mootmaker-management-cloudformation
+      Description: >-
+        Assumed by CloudFormation to apply scp-guardrails, billing-alert and
+        identity-center on behalf of ManagementStackOperator. Cannot change
+        access to the management account itself.
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Service: cloudformation.amazonaws.com
+            Action: sts:AssumeRole
+      Policies:
+        - PolicyName: manage-bootstrap-stacks
+          PolicyDocument:
+            Version: "2012-10-17"
+            Statement:
+              # scp-guardrails.yaml. Nothing touching accounts, delegated
+              # administrators, handshakes, policy types or leaving the
+              # organization - SCP content and attachment only.
+              - Sid: ServiceControlPolicies
+                Effect: Allow
+                Action:
+                  - organizations:CreatePolicy
+                  - organizations:UpdatePolicy
+                  - organizations:DeletePolicy
+                  - organizations:DescribePolicy
+                  - organizations:AttachPolicy
+                  - organizations:DetachPolicy
+                  - organizations:ListPolicies
+                  - organizations:ListTargetsForPolicy
+                  - organizations:ListPoliciesForTarget
+                  - organizations:TagResource
+                  - organizations:UntagResource
+                  - organizations:ListTagsForResource
+                  - organizations:DescribeOrganization
+                  - organizations:DescribeAccount
+                  - organizations:ListAccounts
+                  - organizations:ListRoots
+                Resource: "*"
+
+              # identity-center.yaml: groups, memberships, permission sets and
+              # account assignments. Provisioning into a member account goes
+              # through that account's Identity Center service-linked role,
+              # so no iam: actions are needed here.
+              - Sid: IdentityCenter
+                Effect: Allow
+                Action:
+                  - sso:CreatePermissionSet
+                  - sso:DescribePermissionSet
+                  - sso:UpdatePermissionSet
+                  - sso:DeletePermissionSet
+                  - sso:ListPermissionSets
+                  - sso:PutInlinePolicyToPermissionSet
+                  - sso:GetInlinePolicyForPermissionSet
+                  - sso:DeleteInlinePolicyFromPermissionSet
+                  - sso:AttachManagedPolicyToPermissionSet
+                  - sso:DetachManagedPolicyFromPermissionSet
+                  - sso:ListManagedPoliciesInPermissionSet
+                  - sso:AttachCustomerManagedPolicyReferenceToPermissionSet
+                  - sso:DetachCustomerManagedPolicyReferenceFromPermissionSet
+                  - sso:ListCustomerManagedPolicyReferencesInPermissionSet
+                  - sso:PutPermissionsBoundaryToPermissionSet
+                  - sso:GetPermissionsBoundaryForPermissionSet
+                  - sso:DeletePermissionsBoundaryFromPermissionSet
+                  - sso:ProvisionPermissionSet
+                  - sso:DescribePermissionSetProvisioningStatus
+                  - sso:ListPermissionSetProvisioningStatus
+                  - sso:ListAccountsForProvisionedPermissionSet
+                  - sso:CreateAccountAssignment
+                  - sso:DeleteAccountAssignment
+                  - sso:DescribeAccountAssignmentCreationStatus
+                  - sso:DescribeAccountAssignmentDeletionStatus
+                  - sso:ListAccountAssignments
+                  - sso:ListAccountAssignmentCreationStatus
+                  - sso:ListAccountAssignmentDeletionStatus
+                  - sso:TagResource
+                  - sso:UntagResource
+                  - sso:ListTagsForResource
+                  - sso:DescribeInstance
+                  - identitystore:CreateGroup
+                  - identitystore:DescribeGroup
+                  - identitystore:UpdateGroup
+                  - identitystore:DeleteGroup
+                  - identitystore:ListGroups
+                  - identitystore:CreateGroupMembership
+                  - identitystore:DescribeGroupMembership
+                  - identitystore:DeleteGroupMembership
+                  - identitystore:ListGroupMemberships
+                  - identitystore:GetGroupId
+                  - identitystore:GetGroupMembershipId
+                Resource: "*"
+
+              # billing-alert.yaml.
+              - Sid: Budgets
+                Effect: Allow
+                Action:
+                  - budgets:ViewBudget
+                  - budgets:ModifyBudget
+                  - budgets:TagResource
+                  - budgets:UntagResource
+                  - budgets:ListTagsForResource
+                Resource: "*"
+
+              # Whoever can edit permission sets can grant themselves
+              # anything, so no stack run through this role may grant,
+              # provision or remove access in the management account, or
+              # edit the two permission sets below. Management access
+              # changes only through this stack, which only root updates.
+              # Assignments here are to USERs, never groups, so adding a
+              # user to some group can't reach them either.
+              - Sid: DenyManagementAccountAccessChanges
+                Effect: Deny
+                Action:
+                  - sso:CreateAccountAssignment
+                  - sso:DeleteAccountAssignment
+                  - sso:ProvisionPermissionSet
+                Resource: !Sub "arn:${AWS::Partition}:sso:::account/${pManagementAccountId}"
+
+              - Sid: DenyManagementPermissionSetChanges
+                Effect: Deny
+                Action: sso:*
+                Resource:
+                  - !GetAtt StackOperatorPermissionSet.PermissionSetArn
+                  - !GetAtt BillingReadOnlyPermissionSet.PermissionSetArn
+
+  StackOperatorPermissionSet:
+    Type: AWS::SSO::PermissionSet
+    Properties:
+      Name: ManagementStackOperator
+      Description: >-
+        Update the scp-guardrails, billing-alert and identity-center stacks,
+        only through the mootmaker-management-cloudformation service role.
+      InstanceArn: !Ref pInstanceArn
+      # One hour, and with-management-credentials.sh signs the session out
+      # straight after fetching one set, so these never renew.
+      SessionDuration: PT1H
+      InlinePolicy:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: ChangeManagedStacks
+            Effect: Allow
+            Action:
+              - cloudformation:CreateChangeSet
+              - cloudformation:DescribeChangeSet
+              - cloudformation:ExecuteChangeSet
+              - cloudformation:DeleteChangeSet
+              - cloudformation:ListChangeSets
+              - cloudformation:DescribeStacks
+              - cloudformation:DescribeStackEvents
+              - cloudformation:DescribeStackResource
+              - cloudformation:DescribeStackResources
+              - cloudformation:ListStackResources
+              - cloudformation:GetTemplate
+              - cloudformation:GetTemplateSummary
+              - cloudformation:DetectStackDrift
+              - cloudformation:DetectStackResourceDrift
+              - cloudformation:DescribeStackResourceDrifts
+              - cloudformation:ContinueUpdateRollback
+              - cloudformation:CancelUpdateStack
+            # Never add management-access itself here - that would let the
+            # operator rewrite its own access.
+            Resource:
+              - !Sub "arn:${AWS::Partition}:cloudformation:${AWS::Region}:${pManagementAccountId}:stack/scp-guardrails/*"
+              - !Sub "arn:${AWS::Partition}:cloudformation:${AWS::Region}:${pManagementAccountId}:stack/billing-alert/*"
+              - !Sub "arn:${AWS::Partition}:cloudformation:${AWS::Region}:${pManagementAccountId}:stack/identity-center/*"
+
+          - Sid: CloudFormationAccountWideRead
+            Effect: Allow
+            Action:
+              - cloudformation:ValidateTemplate
+              - cloudformation:GetTemplateSummary
+              - cloudformation:ListStacks
+              - cloudformation:DescribeStackDriftDetectionStatus
+            Resource: "*"
+
+          - Sid: PassOnlyTheServiceRole
+            Effect: Allow
+            Action: iam:PassRole
+            # Built from the name, not !GetAtt: the role's own deny references
+            # this permission set, and GetAtt both ways would be circular.
+            Resource: !Sub "arn:${AWS::Partition}:iam::${pManagementAccountId}:role/mootmaker-management-cloudformation"
+            Condition:
+              StringEquals:
+                iam:PassedToService: cloudformation.amazonaws.com
+
+          # Read-only, so drift detection and pre-update checks can see what
+          # the stacks manage. No writes - those go through the service role.
+          - Sid: ReadWhatTheStacksManage
+            Effect: Allow
+            Action:
+              - organizations:Describe*
+              - organizations:List*
+              - sso:Describe*
+              - sso:List*
+              - sso:GetInlinePolicyForPermissionSet
+              - sso:GetPermissionsBoundaryForPermissionSet
+              - identitystore:Describe*
+              - identitystore:List*
+              - identitystore:Get*
+              - budgets:ViewBudget
+            Resource: "*"
+
+          - Sid: NeverManagementAccess
+            Effect: Deny
+            Action: cloudformation:*
+            Resource: !Sub "arn:${AWS::Partition}:cloudformation:${AWS::Region}:${pManagementAccountId}:stack/${AWS::StackName}/*"
+
+  # Custom rather than AWSBillingReadOnlyAccess: that also grants payment
+  # methods, tax registrations and account contact details, none of which
+  # explain a bill. Free Tier usage is tracked at the organization (payer)
+  # level, which is the main thing this adds over the workload account's
+  # own ce:*.
+  BillingReadOnlyPermissionSet:
+    Type: AWS::SSO::PermissionSet
+    Properties:
+      Name: ManagementBillingReadOnly
+      Description: >-
+        Read the organization's costs, budgets, Free Tier usage and bills.
+        No payment, tax, account-contact or write access.
+      InstanceArn: !Ref pInstanceArn
+      SessionDuration: PT1H
+      InlinePolicy:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: ReadBilling
+            Effect: Allow
+            Action:
+              - ce:Get*
+              - ce:Describe*
+              - ce:List*
+              - budgets:ViewBudget
+              - budgets:Describe*
+              - freetier:Get*
+              - billing:Get*
+              - billing:List*
+              - invoicing:Get*
+              - invoicing:List*
+              - consolidatedbilling:Get*
+              - consolidatedbilling:List*
+            Resource: "*"
+
+  StackOperatorAssignment:
+    Type: AWS::SSO::Assignment
+    Properties:
+      InstanceArn: !Ref pInstanceArn
+      PermissionSetArn: !GetAtt StackOperatorPermissionSet.PermissionSetArn
+      PrincipalId: !Ref pOperatorUserId
+      PrincipalType: USER
+      TargetId: !Ref pManagementAccountId
+      TargetType: AWS_ACCOUNT
+
+  BillingReadOnlyAssignment:
+    Type: AWS::SSO::Assignment
+    Properties:
+      InstanceArn: !Ref pInstanceArn
+      PermissionSetArn: !GetAtt BillingReadOnlyPermissionSet.PermissionSetArn
+      PrincipalId: !Ref pBillingUserId
+      PrincipalType: USER
+      TargetId: !Ref pManagementAccountId
+      TargetType: AWS_ACCOUNT
+
+Outputs:
+  CloudFormationServiceRoleArn:
+    Description: Passed as --role-arn by deploy-stack.sh for every management stack.
+    Value: !GetAtt CloudFormationServiceRole.Arn
+  StackOperatorPermissionSetArn:
+    Value: !GetAtt StackOperatorPermissionSet.PermissionSetArn
+  BillingReadOnlyPermissionSetArn:
+    Value: !GetAtt BillingReadOnlyPermissionSet.PermissionSetArn
