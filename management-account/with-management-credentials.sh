@@ -26,8 +26,6 @@ MANAGEMENT_ACCOUNT=339140804537
 ROLE=ManagementStackOperator
 
 scratch=$(mktemp -d)
-cleanup() { rm -rf "$scratch"; }
-trap cleanup EXIT INT TERM
 
 mkdir -p "$scratch/.aws"
 cat >"$scratch/.aws/config" <<EOF
@@ -46,14 +44,24 @@ EOF
 in_scratch() { env -u AWS_PROFILE -u AWS_ACCESS_KEY_ID -u AWS_SECRET_ACCESS_KEY -u AWS_SESSION_TOKEN \
   HOME="$scratch" AWS_CONFIG_FILE="$scratch/.aws/config" AWS_SHARED_CREDENTIALS_FILE=/dev/null aws "$@"; }
 
+# Sign out on every exit path, not only success: if fetching credentials
+# fails, the sign-in would otherwise stay live on the server for the rest of
+# the 24-hour session. Inside the throwaway HOME the only cached session is
+# this one, so the everyday one is unaffected.
+cleanup() {
+  if [[ -d $scratch ]]; then
+    in_scratch sso logout >/dev/null 2>&1 || true
+    rm -rf "$scratch"
+  fi
+}
+trap cleanup EXIT INT TERM
+
 echo "Open the URL below in a PRIVATE WINDOW and sign in as geoff-management." >&2
 in_scratch sso login --profile management --no-browser --use-device-code >&2
 
 creds=$(in_scratch configure export-credentials --profile management --format process)
 
-# Ends the session server-side as well as locally. Inside the throwaway HOME
-# the only cached session is this one, so the everyday one is unaffected.
-in_scratch sso logout >&2
+# Ends the session server-side as well as locally, before the command runs.
 cleanup
 
 AWS_ACCESS_KEY_ID=$(jq -r .AccessKeyId <<<"$creds")
