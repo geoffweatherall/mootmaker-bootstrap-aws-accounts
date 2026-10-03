@@ -244,10 +244,18 @@ Then **CloudFormation** (`us-east-1`) > **Create stack** > upload
 
 - `pInstanceArn` - same value as the `identity-center` stack's.
 - `pOperatorUserId` - `geoff-management`'s User ID from step 2.
-- `pBillingUserId` - your everyday user's ID, same as the `identity-center`
-  stack's `pAdminUserId`.
+- `pBillingUserId` - your everyday user's (`geoff.weatherall`) ID, same as
+  the `identity-center` stack's `pAdminUserId`.
 - Tick **I acknowledge that AWS CloudFormation might create IAM resources
   with custom names** (`CAPABILITY_NAMED_IAM` - it creates the service role).
+
+Check the two user IDs before creating the stack. Swapping them gives your
+everyday user the operator role - exactly what the separate user exists to
+prevent - and the only symptom is a `ForbiddenException: No access` from the
+helper. Afterwards, **IAM Identity Center > AWS accounts > 339140804537 >
+Users and groups** should show `geoff-management` with
+`ManagementStackOperator` and `geoff.weatherall` with
+`ManagementBillingReadOnly`.
 
 ### After creating it
 
