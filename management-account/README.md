@@ -200,7 +200,7 @@ any more.
 
 Lets the other three stacks be updated from the command line through IAM
 Identity Center, and lets Claude read the organization's bill. Design and
-reasoning: [mootmaker/designs/cloudformation-from-cli-via-sso.md](https://github.com/geoffweatherall/mootmaker/blob/main/designs/cloudformation-from-cli-via-sso.md).
+reasoning: [mootmaker/designs/archive/cloudformation-from-cli-via-sso.md](https://github.com/geoffweatherall/mootmaker/blob/main/designs/archive/cloudformation-from-cli-via-sso.md).
 
 | Resource | What it is |
 |---|---|
