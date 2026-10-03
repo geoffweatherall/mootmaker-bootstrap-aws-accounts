@@ -125,10 +125,18 @@ if ! aws cloudformation wait change-set-create-complete --region "$REGION" \
 fi
 
 echo "== Change set $change_set for $stack ($change_set_type)"
-aws cloudformation describe-change-set --region "$REGION" \
-  --stack-name "$stack" --change-set-name "$change_set" \
-  --query 'Changes[].ResourceChange.{Action:Action,LogicalId:LogicalResourceId,Type:ResourceType,Replacement:Replacement}' \
-  --output table
+changes=$(aws cloudformation describe-change-set --region "$REGION" \
+  --stack-name "$stack" --change-set-name "$change_set" --query 'length(Changes)')
+if [[ $changes == 0 ]]; then
+  # Template text (comments, descriptions) or the service role changed, but
+  # no resource does - executing it only updates what the stack records.
+  echo "No resource changes - only the stored template or stack settings differ."
+else
+  aws cloudformation describe-change-set --region "$REGION" \
+    --stack-name "$stack" --change-set-name "$change_set" \
+    --query 'Changes[].ResourceChange.{Action:Action,LogicalId:LogicalResourceId,Type:ResourceType,Replacement:Replacement}' \
+    --output table
+fi
 
 if [[ ! -t 0 ]] || ! { exec 3</dev/tty; } 2>/dev/null; then
   delete_change_set
