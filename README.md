@@ -153,3 +153,15 @@ for what that role can and cannot do.
 `management-account/management-access.yaml` - the access just described - is
 the one stack still applied by root in the console, deliberately.
 
+
+## Account checks
+
+Two read-only scripts check the workload account as a whole rather than any one environment:
+
+- **`list-unmanaged-resources.sh`** lists resources that no Terraform state or CloudFormation stack
+  claims. Run it when finishing a piece of work, and expect `Nothing needs attention`.
+- **`check-accumulation.sh`** checks that nothing grows with time rather than use (mootmaker#77):
+  log groups without retention, Lambda functions with more than four published versions, and a
+  history-cleanup job that has stopped advancing its retention boundary. It also prints each
+  standing environment's DynamoDB item counts for comparison. It runs daily in
+  mootmaker-ephemeral-envs' `sweep.yml`, and exits 1 on any failure so that run goes red.
