@@ -188,7 +188,8 @@ echo "Read ${state_count} Terraform state file(s) and ${stack_count} CloudFormat
   aws cloudwatch describe-alarms --query 'MetricAlarms[].AlarmName' --output text 2>/dev/null | tr '\t' '\n' | sed 's/^/cloudwatch-alarm\t/'
   aws cloudwatch describe-alarms --query 'CompositeAlarms[].AlarmName' --output text 2>/dev/null | tr '\t' '\n' | sed 's/^/cloudwatch-alarm\t/'
   aws cloudwatch list-dashboards --query 'DashboardEntries[].DashboardName' --output text 2>/dev/null | tr '\t' '\n' | sed 's/^/cloudwatch-dashboard\t/'
-} | grep -P '^[a-z0-9-]+\t\S' > "${workdir}/live.txt" || true
+  aws ssm describe-parameters --query 'Parameters[].Name' --output text 2>/dev/null | tr '\t' '\n' | sed 's/^/ssm-parameter\t/'
+}| grep -P '^[a-z0-9-]+\t\S' > "${workdir}/live.txt" || true
 # END-ENUMERATION
 
 live_count="$(wc -l < "${workdir}/live.txt")"
@@ -242,6 +243,19 @@ while IFS=$'\t' read -r class name; do
   if [[ "${class}" == "log-group" && "${name}" == /aws/lambda/* ]]; then
     fn="${name#/aws/lambda/}"
     grep -qxF "${fn}" "${workdir}/managed-index.txt" && continue
+  fi
+
+  # SSM parameters match on their FULL name only. Every environment writes the same leaves under
+  # its own prefix (/mootmaker/<environment>/api/graphql-url, ...), so the last-segment match below
+  # would let production's parameter vouch for a stray copy left behind by a destroyed environment -
+  # the partial-destroy leftover this check exists to find (bootstrap-aws-accounts#35).
+  if [[ "${class}" == "ssm-parameter" ]]; then
+    if grep -qxF "${name}" "${workdir}/managed-index.txt"; then
+      if (( verbose )); then echo "  managed: ${class} ${name}"; fi
+      continue
+    fi
+    printf '%s\t%s\n' "${class}" "${name}" >> "${workdir}/unmanaged.txt"
+    continue
   fi
 
   if grep -qxF "${name}" "${workdir}/managed-index.txt" \
@@ -312,7 +326,7 @@ tf_type_prefix_to_cli=(
 declare -A tf_service_to_cli=(
   [acm]=acm [appsync]=appsync [cloudfront]=cloudfront [cognito]=cognito-idp
   [dynamodb]=dynamodb [ecr]=ecr [efs]=efs [iam]=iam [kms]=kms [lambda]=lambda [route53]=route53
-  [s3]=s3api [secretsmanager]=secretsmanager [ses]=ses [sns]=sns [sqs]=sqs
+  [s3]=s3api [secretsmanager]=secretsmanager [ses]=ses [sns]=sns [sqs]=sqs [ssm]=ssm
 )
 
 # The CLI services this script actually calls, read from the enumeration block above.
