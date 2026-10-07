@@ -11,8 +11,9 @@ configured - not from the management account. Three independent templates:
   high threshold.
 - `github-actions-deploy-role.yaml` - the GitHub Actions OIDC provider and deploy
   role [mootmaker/designs/archive/ci-cd-pipeline.md](https://github.com/geoffweatherall/mootmaker/blob/main/designs/archive/ci-cd-pipeline.md)'s
-  release pipeline assumes to deploy `test`/`production` - no long-lived AWS
-  credential is ever stored in GitHub.
+  release pipeline assumes to deploy `test`/`production`, plus a narrower
+  ephemeral-only role for pull requests and cloud-session environments - no
+  long-lived AWS credential is ever stored in GitHub.
 
 They don't depend on each other and can be deployed in either order.
 
@@ -90,25 +91,36 @@ here later (including manually, via the console) will cost ~$0.02/day.
 
 ## github-actions-deploy-role.yaml
 
-Creates the `token.actions.githubusercontent.com` OIDC provider (this account has none yet - a
-fresh `AWS::IAM::OIDCProvider`, verified via `aws iam list-open-id-connect-providers` before
-writing this) and one deploy role, `mootmaker-release-github-actions-deploy`.
+Creates the `token.actions.githubusercontent.com` OIDC provider and two roles that GitHub Actions
+runs assume with a short-lived OIDC token. No AWS credential is stored in GitHub or in a cloud
+Claude session.
 
-**Trust is scoped to `job_workflow_ref`, not just `repository`** - only a run of one of four exact
-reusable-workflow files (`mootmaker-api`/`mootmaker-webapp`/`mootmaker-demo-data`'s
-`release-build.yml`, at a `refs/tags/v*` ref; `mootmaker-release`'s own `release.yml`, at
-`refs/heads/main`) can assume this role. None of those workflow files exist yet - see
-[mootmaker/designs/archive/ci-cd-pipeline.md](https://github.com/geoffweatherall/mootmaker/blob/main/designs/archive/ci-cd-pipeline.md),
-still `Drafting`. Applying this stack ahead of those files existing is safe (nothing can assume a
-role whose trust condition nothing yet matches); it just means the deploy role sits unused until
-the pipeline is actually built.
+| Role | Trusted `sub` | Used by |
+|---|---|---|
+| `mootmaker-release-github-actions-deploy` | component repos at `refs/tags/v*`; mootmaker-release and mootmaker-ephemeral-envs at `refs/heads/main` | releases (`test`, `production`) and the daily sweep |
+| `mootmaker-ephemeral-github-actions-deploy` | `pull_request` in mootmaker-android and mootmaker-webapp; mootmaker-ephemeral-envs at `refs/heads/main` | pull-request acceptance runs and `ephemeral-env.yml`, which is how cloud sessions get an environment ([android-app.md](https://github.com/geoffweatherall/mootmaker/blob/main/designs/android-app.md) Q7) |
 
-**Permission policy is a first draft, scoped by resource-name pattern (`*-mootmaker-*`) everywhere
-AWS's IAM model allows it** (S3, DynamoDB, Lambda, the Lambda exec roles, EventBridge, SSM, Route
-53 - scoped to the actual `mootmaker.com` hosted zone). AppSync, Cognito, ACM, and CloudFront
-assign IDs only at creation time, so their create actions are `Resource: "*"` - not an oversight,
-just what those services' ARN model allows. Built by grepping
+**Trust is by `sub` only: repository and ref, not workflow file.** AWS supports only `sub` and `aud`
+as OIDC condition keys, so any workflow in a trusted repository at a matching ref can assume a
+role. The template's header explains this, and how it was found (issue #9). Repositories are pinned
+by their immutable numeric IDs.
+
+**Both roles share the same Allow policies**, six managed policies named `mootmaker-deploy-*`, so
+a permission added for a component reaches both at once. They are scoped by resource-name pattern
+(`*-mootmaker-*`) everywhere AWS's IAM model allows it (S3, DynamoDB, Lambda, the Lambda exec
+roles, EventBridge, SSM, Route 53 - scoped to the actual `mootmaker.com` hosted zone). AppSync,
+Cognito, ACM, and CloudFront assign IDs only at creation time, so their create actions are
+`Resource: "*"` - not an oversight, just what those services' ARN model allows. Built by grepping
 `mootmaker-api`/`mootmaker-webapp`/`mootmaker-demo-data`'s `deploy/terraform/*.tf` directly for
 every `resource "aws_*"` block, not guessed from memory. **Expect this to need iteration** once
 real workflow runs surface a missing permission - see the design doc's own Risks table for why
 that's the accepted cost of starting narrow.
+
+**The ephemeral role adds explicit denials for `test` and `production`**: their Terraform state,
+everything named `test-mootmaker-*` or `production-mootmaker-*`, their `/mootmaker/<env>/` SSM
+parameters, and any DNS change outside an ephemeral environment's own subdomain. It **cannot** deny
+by name what has no name: AppSync APIs, Cognito user pools, CloudFront distributions and ACM
+certificates, and the Lambda exec-role statement that lets either role create a role with any
+inline policy. Those make the denials a guard against mistakes rather than against misuse by
+someone with push access; the template's comment on `GitHubActionsEphemeralRole` has the detail
+and the follow-up that would close them.
