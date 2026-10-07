@@ -3,6 +3,12 @@
 # short-lived GitHub-issued OIDC token for temporary credentials by assuming this role. Deploy in
 # the workload account (431071856068). Requires CAPABILITY_NAMED_IAM.
 #
+# A second, narrower role lives here too: mootmaker-ephemeral-github-actions-deploy, for
+# pull-request workflows and for ephemeral environments requested by cloud Claude sessions
+# (mootmaker/designs/android-app.md Q7). It shares the release role's Allow policies, which are
+# managed policies for exactly that reason, and adds explicit denials for test and production. See
+# its own comment, GitHubActionsEphemeralRole below, including what those denials cannot cover.
+#
 # SCOPE - READ THIS BEFORE TRUSTING IT TO BE NARROWER THAN IT IS. This header used to claim trust
 # was conditioned on job_workflow_ref, so that only a run of one specific reusable-workflow file
 # could assume the role. That was the intent, and it is NOT what this template does, because AWS
@@ -33,8 +39,9 @@
 # design doc's own Risks table.
 AWSTemplateFormatVersion: '2010-09-09'
 Description: >-
-  GitHub Actions OIDC provider + deploy role for mootmaker's release pipeline (see
-  mootmaker/designs/archive/ci-cd-pipeline.md). Deploy in the workload account. Requires
+  GitHub Actions OIDC provider, the deploy role for mootmaker's release pipeline (see
+  mootmaker/designs/archive/ci-cd-pipeline.md), and a narrower ephemeral-only role for pull
+  requests and cloud-session environments (mootmaker/designs/android-app.md Q7). Deploy in the workload account. Requires
   CAPABILITY_NAMED_IAM. See this file's own header comment for the full reasoning.
 
 Parameters:
@@ -73,6 +80,10 @@ Parameters:
   pMootmakerEphemeralEnvsRepo:
     Type: String
     Default: geoffweatherall@1743794/mootmaker-ephemeral-envs@1334617437
+  # The ephemeral role's pull_request trust (android-app.md Q7). Same ID-qualified form as above.
+  pMootmakerAndroidRepo:
+    Type: String
+    Default: geoffweatherall@1743794/mootmaker-android@1292771509
   pAccountId:
     Type: String
     Default: "431071856068"
@@ -147,419 +158,566 @@ Resources:
                   - !Sub "repo:${pMootmakerDemoDataRepo}:ref:refs/tags/v*"
                   - !Sub "repo:${pMootmakerReleaseRepo}:ref:refs/heads/main"
                   - !Sub "repo:${pMootmakerEphemeralEnvsRepo}:ref:refs/heads/main"
+      ManagedPolicyArns:
+        - !Ref DeployTerraformStatePolicy
+        - !Ref DeployWebappHostingPolicy
+        - !Ref DeployApiAvatarsBucketPolicy
+        - !Ref DeployApiCorePolicy
+        - !Ref DeployDemoDataPolicy
+        - !Ref DeployMiscPolicy
+
+  # The ephemeral role: android-app.md's Q7, answer B. Assumed by pull-request workflows and by
+  # mootmaker-ephemeral-envs' ephemeral-env.yml, which is how cloud Claude sessions get an
+  # environment without ever holding AWS credentials themselves - a session dispatches that
+  # workflow, and the run gets short-lived credentials from here.
+  #
+  # Same Allow policies as the release role above - they are shared managed policies, so a
+  # permission added for a component reaches both roles at once rather than drifting. On top of
+  # them, EphemeralOnly denies everything that belongs to `test` or `production`. Every component
+  # names its resources `<environment>-mootmaker-*` (resource_prefix in mootmaker-api's locals.tf),
+  # keeps its Terraform state under `<environment>/` in the state bucket, its SSM parameters under
+  # `/mootmaker/<environment>/`, and its DNS names under `<environment>.mootmaker.com` (production
+  # drops the environment), so those denials can be written by name.
+  #
+  # WHAT THE DENY DOES NOT COVER. AppSync APIs, Cognito user pools, CloudFront distributions and
+  # ACM certificates are identified by IDs assigned at creation and carry no environment tag, so
+  # there is no name or tag to deny on: this role can reach test's and production's as the release
+  # role can. Terraform here only touches what its own state names, and production's state is
+  # denied, so that is a gap against deliberate misuse rather than against a mistaken run. The same
+  # is true of the LambdaExecRoles statement: a role allowed to create `*-mootmaker-*` IAM roles
+  # with any inline policy, pass them to a Lambda and invoke it can grant itself anything. Closing
+  # either properly needs component changes (resource tags; a permissions boundary on Lambda exec
+  # roles), and is a follow-up, not part of this role.
+  #
+  # Trust: pull_request from the two frontends (GitHub withholds OIDC tokens from fork PRs, so
+  # this never reaches an outside contributor), and mootmaker-ephemeral-envs at main for
+  # ephemeral-env.yml. A pull_request token's sub carries no ref, so any branch's PR workflow in
+  # those repos can assume it - which is why it gets this role and not the release one.
+  GitHubActionsEphemeralRole:
+    Type: AWS::IAM::Role
+    Properties:
+      RoleName: mootmaker-ephemeral-github-actions-deploy
+      MaxSessionDuration: 3600
+      AssumeRolePolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Effect: Allow
+            Principal:
+              Federated: !GetAtt GitHubOidcProvider.Arn
+            Action: sts:AssumeRoleWithWebIdentity
+            Condition:
+              StringEquals:
+                token.actions.githubusercontent.com:aud: sts.amazonaws.com
+              # `sub` only, for the reason given at the release role's trust condition.
+              StringLike:
+                token.actions.githubusercontent.com:sub:
+                  - !Sub "repo:${pMootmakerAndroidRepo}:pull_request"
+                  - !Sub "repo:${pMootmakerWebappRepo}:pull_request"
+                  - !Sub "repo:${pMootmakerEphemeralEnvsRepo}:ref:refs/heads/main"
+      ManagedPolicyArns:
+        - !Ref DeployTerraformStatePolicy
+        - !Ref DeployWebappHostingPolicy
+        - !Ref DeployApiAvatarsBucketPolicy
+        - !Ref DeployApiCorePolicy
+        - !Ref DeployDemoDataPolicy
+        - !Ref DeployMiscPolicy
       Policies:
-        # Terraform remote state (S3 native locking, use_lockfile - no DynamoDB lock table exists
-        # or is needed). Every component's state lives under its own key in this one bucket, so this
-        # can't be scoped tighter than bucket-wide without hardcoding every current and future
-        # environment/state-key combination.
-        - PolicyName: TerraformState
+        - PolicyName: EphemeralOnly
           PolicyDocument:
             Version: "2012-10-17"
             Statement:
-              - Sid: StateBucket
-                Effect: Allow
-                Action:
-                  - s3:GetObject
-                  - s3:PutObject
-                  - s3:DeleteObject
-                  - s3:ListBucket
+              # Reading production's state would hand over every ID the name denials below
+              # cannot cover, and the secrets Terraform keeps in state; writing it is how a
+              # Terraform run would act on production at all.
+              - Sid: DenyLongLivedState
+                Effect: Deny
+                Action: s3:*
                 Resource:
-                  - !Sub "arn:aws:s3:::remote-state-${pAccountId}"
-                  - !Sub "arn:aws:s3:::remote-state-${pAccountId}/*"
-
-        # mootmaker-webapp: S3 site bucket (name pattern verified against s3.tf/locals.tf:
-        # <environment>-mootmaker-webapp-site-<account-id>) + CloudFront + ACM + Route 53.
-        - PolicyName: WebappHosting
-          PolicyDocument:
-            Version: "2012-10-17"
-            Statement:
-              - Sid: SiteBucket
-                Effect: Allow
-                Action:
-                  - s3:CreateBucket
-                  - s3:DeleteBucket
-                  - s3:GetBucketPolicy
-                  - s3:PutBucketPolicy
-                  - s3:DeleteBucketPolicy
-                  - s3:GetBucketPublicAccessBlock
-                  - s3:PutBucketPublicAccessBlock
-                  - s3:GetObject
-                  - s3:PutObject
-                  - s3:DeleteObject
-                  - s3:ListBucket
-                  # Terraform refreshes every bucket sub-resource it manages, and reads several it
-                  # does not, to detect drift - so these are needed for destroy as much as apply.
-                  # All read-only, still scoped to the webapp site bucket. Added 2026-09-03 during
-                  # bring-up, after s3:GetBucketAcl blocked the first webapp proving run.
-                  - s3:GetBucketAcl
-                  - s3:GetBucketCORS
-                  - s3:GetBucketLocation
-                  - s3:GetBucketLogging
-                  - s3:GetBucketNotification
-                  - s3:GetBucketObjectLockConfiguration
-                  - s3:GetBucketRequestPayment
-                  - s3:GetBucketTagging
-                  - s3:GetBucketVersioning
-                  - s3:GetBucketWebsite
-                  - s3:GetAccelerateConfiguration
-                  - s3:GetEncryptionConfiguration
-                  - s3:GetLifecycleConfiguration
-                  - s3:GetReplicationConfiguration
-                  # Emptying the bucket before deleting it enumerates object versions and delete
-                  # markers, not just current objects - so teardown needs these even though the
-                  # bucket is not deliberately versioned. Without them, destroy leaves the bucket
-                  # behind. Added 2026-09-03 during bring-up.
-                  - s3:ListBucketVersions
-                  - s3:DeleteObjectVersion
+                  - !Sub "arn:aws:s3:::remote-state-${pAccountId}/test/*"
+                  - !Sub "arn:aws:s3:::remote-state-${pAccountId}/production/*"
+              - Sid: DenyListingLongLivedState
+                Effect: Deny
+                Action: s3:ListBucket
+                Resource: !Sub "arn:aws:s3:::remote-state-${pAccountId}"
+                Condition:
+                  StringLike:
+                    s3:prefix:
+                      - test/*
+                      - production/*
+              # Everything named for test or production. The Lambda entry includes their
+              # database-reset functions, which this role could otherwise invoke.
+              - Sid: DenyLongLivedResources
+                Effect: Deny
+                Action: "*"
                 Resource:
-                  - !Sub "arn:aws:s3:::*-mootmaker-webapp-site-${pAccountId}"
-                  - !Sub "arn:aws:s3:::*-mootmaker-webapp-site-${pAccountId}/*"
-              - Sid: CloudFrontAndAcm
-                Effect: Allow
-                # CloudFront distribution/OAC IDs and ACM certificate ARNs are assigned only at
-                # creation - AWS's IAM model has no way to pre-scope a Create* action to a resource
-                # that doesn't exist yet for either service, so this is Resource "*" deliberately,
-                # not an oversight. Both services are otherwise identify-scoped by this role's own
-                # trust condition (only these four workflow files can reach this policy at all).
-                Action:
-                  - cloudfront:*
-                  - acm:*
+                  - "arn:aws:s3:::test-mootmaker-*"
+                  - "arn:aws:s3:::production-mootmaker-*"
+                  - !Sub "arn:aws:dynamodb:${pRegion}:${pAccountId}:table/test-mootmaker-*"
+                  - !Sub "arn:aws:dynamodb:${pRegion}:${pAccountId}:table/production-mootmaker-*"
+                  - !Sub "arn:aws:lambda:${pRegion}:${pAccountId}:function:test-mootmaker-*"
+                  - !Sub "arn:aws:lambda:${pRegion}:${pAccountId}:function:production-mootmaker-*"
+                  - !Sub "arn:aws:iam::${pAccountId}:role/test-mootmaker-*"
+                  - !Sub "arn:aws:iam::${pAccountId}:role/production-mootmaker-*"
+                  - !Sub "arn:aws:events:${pRegion}:${pAccountId}:rule/test-mootmaker-*"
+                  - !Sub "arn:aws:events:${pRegion}:${pAccountId}:rule/production-mootmaker-*"
+                  - !Sub "arn:aws:ssm:${pRegion}:${pAccountId}:parameter/mootmaker/test/*"
+                  - !Sub "arn:aws:ssm:${pRegion}:${pAccountId}:parameter/mootmaker/production/*"
+                  - !Sub "arn:aws:logs:${pRegion}:${pAccountId}:log-group:/aws/lambda/test-mootmaker-*"
+                  - !Sub "arn:aws:logs:${pRegion}:${pAccountId}:log-group:/aws/lambda/production-mootmaker-*"
+              # The hosted zone is shared with test, production and mootmaker-domain's own
+              # records, so record changes are allowed only for names inside an ephemeral
+              # environment's subdomain: <kind>-<YYMMDD>-<rand4>, the shape
+              # create-ephemeral-env.sh generates (www.claude-261007-ab12.mootmaker.com and the
+              # ACM validation records under it). IAM globs cannot express digits, so ?????? is
+              # the closest match; nothing long-lived has a name of that shape. AWS lowercases
+              # these names and strips the trailing dot before comparing.
+              - Sid: DenyNonEphemeralDnsChanges
+                Effect: Deny
+                Action: route53:ChangeResourceRecordSets
                 Resource: "*"
-              - Sid: Route53
-                Effect: Allow
-                Action:
-                  - route53:ChangeResourceRecordSets
-                  - route53:GetChange
-                  - route53:ListResourceRecordSets
-                  # Added 2026-09-03 during bring-up: Terraform's aws_route53_zone data source
-                  # reads the zone itself and its tags, not just its records. Both stay scoped to
-                  # this one hosted zone.
-                  - route53:GetHostedZone
-                  - route53:ListTagsForResource
-                Resource:
-                  - "arn:aws:route53:::hostedzone/Z03440533GE3SURWYAZRT"
-                  - "arn:aws:route53:::change/*"
-              # route53:ListHostedZones cannot be resource-scoped - it is a list operation over the
-              # account, so AWS only accepts "*". Added 2026-09-03 after the first successful-OIDC
-              # proving run failed on it: Terraform's aws_route53_zone data source calls it to
-              # resolve the zone by name before touching any record. Read-only.
-              - Sid: Route53List
-                Effect: Allow
-                Action:
-                  - route53:ListHostedZones
-                  - route53:ListHostedZonesByName
-                Resource: "*"
-              # Terraform reads the SES domain identity's verification state on every apply that
-              # touches the email pipeline's DNS records. Read-only, and there is no narrower
-              # resource form for these two - SES identity verification calls take "*".
-              - Sid: SesRead
-                Effect: Allow
-                Action:
-                  - ses:GetIdentityVerificationAttributes
-                  - ses:GetIdentityDkimAttributes
-                Resource: "*"
+                Condition:
+                  ForAnyValue:StringNotLike:
+                    route53:ChangeResourceRecordSetsNormalizedRecordNames:
+                      - "*.*-??????-????.mootmaker.com"
 
-        # mootmaker-api: AppSync + Cognito + DynamoDB + the Lambdas behind AppSync's resolvers and
-        # database-reset/database-repair, plus their IAM exec roles.
-        # mootmaker-api's avatars bucket (avatars.tf: <environment>-mootmaker-avatars-<account-id>),
-        # added with API-owned avatar uploads (mootmaker-api's person-avatar-upload-refactor). Same
-        # shape as the webapp's SiteBucket above, plus the lifecycle rule that expires abandoned
-        # uploads. Its CloudFront distribution, certificate and DNS records are already covered by
-        # WebappHosting's CloudFrontAndAcm and Route 53 statements. Added 2026-10-01, after the
-        # first release carrying avatars failed in build-api with AccessDenied on s3:CreateBucket.
-        - PolicyName: ApiAvatarsBucket
-          PolicyDocument:
-            Version: "2012-10-17"
-            Statement:
-              - Sid: AvatarsBucket
-                Effect: Allow
-                Action:
-                  - s3:CreateBucket
-                  - s3:DeleteBucket
-                  - s3:GetBucketPolicy
-                  - s3:PutBucketPolicy
-                  - s3:DeleteBucketPolicy
-                  - s3:GetBucketPublicAccessBlock
-                  - s3:PutBucketPublicAccessBlock
-                  - s3:GetLifecycleConfiguration
-                  - s3:PutLifecycleConfiguration
-                  - s3:GetObject
-                  - s3:PutObject
-                  - s3:DeleteObject
-                  - s3:ListBucket
-                  # Read-only drift detection on refresh, and version enumeration so destroy can
-                  # empty the bucket - the same reasons as SiteBucket's identical entries.
-                  - s3:GetBucketAcl
-                  - s3:GetBucketCORS
-                  - s3:GetBucketLocation
-                  - s3:GetBucketLogging
-                  - s3:GetBucketNotification
-                  - s3:GetBucketObjectLockConfiguration
-                  - s3:GetBucketOwnershipControls
-                  - s3:GetBucketRequestPayment
-                  - s3:GetBucketTagging
-                  - s3:GetBucketVersioning
-                  - s3:GetBucketWebsite
-                  - s3:GetAccelerateConfiguration
-                  - s3:GetEncryptionConfiguration
-                  - s3:GetReplicationConfiguration
-                  - s3:ListBucketVersions
-                  - s3:DeleteObjectVersion
-                Resource:
-                  - !Sub "arn:aws:s3:::*-mootmaker-avatars-${pAccountId}"
-                  - !Sub "arn:aws:s3:::*-mootmaker-avatars-${pAccountId}/*"
+  # Terraform remote state (S3 native locking, use_lockfile - no DynamoDB lock table exists
+  # or is needed). Every component's state lives under its own key in this one bucket, so this
+  # can't be scoped tighter than bucket-wide without hardcoding every current and future
+  # environment/state-key combination.
+  DeployTerraformStatePolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: mootmaker-deploy-TerraformState
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: StateBucket
+            Effect: Allow
+            Action:
+              - s3:GetObject
+              - s3:PutObject
+              - s3:DeleteObject
+              - s3:ListBucket
+            Resource:
+              - !Sub "arn:aws:s3:::remote-state-${pAccountId}"
+              - !Sub "arn:aws:s3:::remote-state-${pAccountId}/*"
 
-        - PolicyName: ApiCore
-          PolicyDocument:
-            Version: "2012-10-17"
-            Statement:
-              - Sid: AppSyncAndCognito
-                Effect: Allow
-                # Same reasoning as CloudFront/ACM above: AppSync API IDs and Cognito user/identity
-                # pool IDs are assigned at creation, so this can't be scoped narrower than "*" for
-                # the create path. Left broad rather than half-scoped in a way that looks tighter
-                # than it actually is.
-                Action:
-                  - appsync:*
-                  - cognito-idp:*
-                Resource: "*"
-              - Sid: DynamoDbTables
-                Effect: Allow
-                Action:
-                  - dynamodb:CreateTable
-                  - dynamodb:DeleteTable
-                  - dynamodb:DescribeTable
-                  - dynamodb:UpdateTable
-                  - dynamodb:TagResource
-                  - dynamodb:UntagResource
-                  - dynamodb:ListTagsOfResource
-                  - dynamodb:PutItem
-                  - dynamodb:GetItem
-                  - dynamodb:UpdateItem
-                  - dynamodb:DeleteItem
-                  # Terraform refreshes these sub-resources on every plan and destroy, not just on
-                  # create. Missing them fails the refresh, which breaks `terraform destroy` as
-                  # surely as it breaks apply - that is how the first deploying run stranded four
-                  # tables. Added 2026-09-03 during bring-up; all read-only.
-                  - dynamodb:DescribeContinuousBackups
-                  - dynamodb:DescribeTimeToLive
-                Resource:
-                  - !Sub "arn:aws:dynamodb:${pRegion}:${pAccountId}:table/*-mootmaker-*"
-              - Sid: LambdaFunctions
-                Effect: Allow
-                Action:
-                  - lambda:CreateFunction
-                  - lambda:DeleteFunction
-                  - lambda:GetFunction
-                  - lambda:UpdateFunctionCode
-                  - lambda:UpdateFunctionConfiguration
-                  - lambda:CreateAlias
-                  - lambda:DeleteAlias
-                  - lambda:UpdateAlias
-                  - lambda:GetAlias
-                  - lambda:AddPermission
-                  - lambda:RemovePermission
-                  - lambda:GetPolicy
-                  - lambda:TagResource
-                  - lambda:UntagResource
-                  - lambda:ListTags
-                  # Terraform reads these on every refresh of an aws_lambda_function, so they are
-                  # needed for destroy as much as for apply. Read-only, still scoped to
-                  # *-mootmaker-* functions. Added 2026-09-03 during bring-up.
-                  # Needed only on the UPDATE path, which is why no ephemeral proving run caught
-                  # it. Creating a function with publish = true publishes version 1 as part of
-                  # CreateFunction; updating an existing one requires a separate PublishVersion
-                  # call. Ephemeral environments are always created from nothing, so they exercise
-                  # only the create path - test and production persist and are updated on every
-                  # release, so they hit this every time. Added 2026-09-03 after it failed the
-                  # second deploy to test.
-                  - lambda:PublishVersion
-                  - lambda:ListVersionsByFunction
-                  - lambda:GetFunctionConfiguration
-                  - lambda:GetFunctionCodeSigningConfig
-                  - lambda:GetFunctionConcurrency
-                  # Terraform's aws_lambda_function_recursion_config, this is not - it's
-                  # reserved_concurrent_executions on aws_lambda_function itself, which Terraform
-                  # manages via these two calls (set a value / unset back to unreserved). Missing
-                  # this failed the first deploy of mootmaker-demo-data#27's reserved-concurrency-1
-                  # change with an AccessDeniedException, after every ephemeral proving run passed -
-                  # `terraform plan` doesn't call this API, only `apply` does, and no ephemeral
-                  # environment exercises this Lambda's concurrency setting. Added 2026-09-21.
-                  - lambda:PutFunctionConcurrency
-                  - lambda:DeleteFunctionConcurrency
-                  - lambda:GetRuntimeManagementConfig
-                  # Not a Terraform action: the acceptance suites invoke database-reset directly
-                  # with AWS credentials to reset an environment before each test (see
-                  # mootmaker-api's README, "Authentication in end-to-end tests"), and
-                  # mootmaker-demo-data's seed step invokes its own Lambda the same way. Without
-                  # this, deploy succeeds and acceptance fails. Still scoped to *-mootmaker-*
-                  # functions, so it cannot reach anything outside this project. Added 2026-09-03
-                  # during bring-up.
-                  - lambda:InvokeFunction
-                Resource:
-                  - !Sub "arn:aws:lambda:${pRegion}:${pAccountId}:function:*-mootmaker-*"
-              - Sid: LambdaExecRoles
-                Effect: Allow
-                Action:
-                  - iam:CreateRole
-                  - iam:DeleteRole
-                  - iam:GetRole
-                  - iam:TagRole
-                  - iam:UntagRole
-                  - iam:PutRolePolicy
-                  - iam:DeleteRolePolicy
-                  - iam:GetRolePolicy
-                  - iam:AttachRolePolicy
-                  - iam:DetachRolePolicy
-                  - iam:PassRole
-                  # Terraform lists a role's inline and attached policies on every refresh, so
-                  # these are needed for destroy as much as for apply. Read-only, and still scoped
-                  # to *-mootmaker-* roles. Added 2026-09-03 during bring-up.
-                  - iam:ListRolePolicies
-                  - iam:ListAttachedRolePolicies
-                  - iam:ListRoleTags
-                  - iam:ListInstanceProfilesForRole
-                Resource:
-                  - !Sub "arn:aws:iam::${pAccountId}:role/*-mootmaker-*"
 
-        # mootmaker-demo-data: its Lambda + IAM exec role (already covered by ApiCore's
-        # LambdaFunctions/LambdaExecRoles statements above, same naming convention) plus its own
-        # EventBridge schedule and SSM parameters (the demo-data-credentials.tf client-credentials
-        # values it reads at deploy time).
-        - PolicyName: DemoData
-          PolicyDocument:
-            Version: "2012-10-17"
-            Statement:
-              - Sid: EventBridgeSchedule
-                Effect: Allow
-                Action:
-                  - events:PutRule
-                  - events:DeleteRule
-                  - events:DescribeRule
-                  - events:PutTargets
-                  - events:RemoveTargets
-                  - events:ListTargetsByRule
-                  # Terraform reads a rule's tags on every refresh, so this is needed for destroy
-                  # as much as apply. Read-only, still scoped to *-mootmaker-* rules. Added
-                  # 2026-09-03 after it blocked the first demo-data proving run.
-                  - events:ListTagsForResource
-                Resource:
-                  - !Sub "arn:aws:events:${pRegion}:${pAccountId}:rule/*-mootmaker-*"
-              - Sid: SsmParameters
-                Effect: Allow
-                Action:
-                  - ssm:GetParameter
-                  - ssm:GetParameters
-                  - ssm:PutParameter
-                  - ssm:DeleteParameter
-                  - ssm:AddTagsToResource
-                  - ssm:RemoveTagsFromResource
-                  - ssm:ListTagsForResource
-                Resource:
-                  - !Sub "arn:aws:ssm:${pRegion}:${pAccountId}:parameter/*mootmaker*"
-              # ssm:DescribeParameters is a list operation over the account and AWS rejects any
-              # resource form narrower than "*" - the denial names
-              # arn:aws:ssm:<region>:<account>:* rather than the parameter itself. Terraform calls
-              # it to read parameter metadata on every refresh, so it is needed for destroy too.
-              # Read-only, and the SCP service allowlist already permits exactly this action.
-              # Added 2026-09-03 during bring-up.
-              # mootmaker-webapp's acceptance suite reads real Cognito emails out of
-              # mootmaker-email-testing's persistent SES/SNS/SQS pipeline - see that repo's
-              # testing-strategy.md. Standing shared infrastructure, not created per environment,
-              # so this is scoped to that one queue by name rather than to a wildcard. Delete is
-              # included because the suite consumes the messages it reads; leaving them would make
-              # every later run pick up a stale code. Added 2026-09-03 during bring-up.
-              - Sid: EmailTestingQueue
-                Effect: Allow
-                Action:
-                  - sqs:ReceiveMessage
-                  - sqs:DeleteMessage
-                  - sqs:GetQueueAttributes
-                  - sqs:GetQueueUrl
-                Resource:
-                  - !Sub "arn:aws:sqs:${pRegion}:${pAccountId}:mootmaker-e2e-inbound-email"
-              - Sid: SsmDescribeParameters
-                Effect: Allow
-                Action:
-                  - ssm:DescribeParameters
-                Resource: "*"
+  # mootmaker-webapp: S3 site bucket (name pattern verified against s3.tf/locals.tf:
+  # <environment>-mootmaker-webapp-site-<account-id>) + CloudFront + ACM + Route 53.
+  DeployWebappHostingPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: mootmaker-deploy-WebappHosting
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: SiteBucket
+            Effect: Allow
+            Action:
+              - s3:CreateBucket
+              - s3:DeleteBucket
+              - s3:GetBucketPolicy
+              - s3:PutBucketPolicy
+              - s3:DeleteBucketPolicy
+              - s3:GetBucketPublicAccessBlock
+              - s3:PutBucketPublicAccessBlock
+              - s3:GetObject
+              - s3:PutObject
+              - s3:DeleteObject
+              - s3:ListBucket
+              # Terraform refreshes every bucket sub-resource it manages, and reads several it
+              # does not, to detect drift - so these are needed for destroy as much as apply.
+              # All read-only, still scoped to the webapp site bucket. Added 2026-09-03 during
+              # bring-up, after s3:GetBucketAcl blocked the first webapp proving run.
+              - s3:GetBucketAcl
+              - s3:GetBucketCORS
+              - s3:GetBucketLocation
+              - s3:GetBucketLogging
+              - s3:GetBucketNotification
+              - s3:GetBucketObjectLockConfiguration
+              - s3:GetBucketRequestPayment
+              - s3:GetBucketTagging
+              - s3:GetBucketVersioning
+              - s3:GetBucketWebsite
+              - s3:GetAccelerateConfiguration
+              - s3:GetEncryptionConfiguration
+              - s3:GetLifecycleConfiguration
+              - s3:GetReplicationConfiguration
+              # Emptying the bucket before deleting it enumerates object versions and delete
+              # markers, not just current objects - so teardown needs these even though the
+              # bucket is not deliberately versioned. Without them, destroy leaves the bucket
+              # behind. Added 2026-09-03 during bring-up.
+              - s3:ListBucketVersions
+              - s3:DeleteObjectVersion
+            Resource:
+              - !Sub "arn:aws:s3:::*-mootmaker-webapp-site-${pAccountId}"
+              - !Sub "arn:aws:s3:::*-mootmaker-webapp-site-${pAccountId}/*"
+          - Sid: CloudFrontAndAcm
+            Effect: Allow
+            # CloudFront distribution/OAC IDs and ACM certificate ARNs are assigned only at
+            # creation - AWS's IAM model has no way to pre-scope a Create* action to a resource
+            # that doesn't exist yet for either service, so this is Resource "*" deliberately,
+            # not an oversight. Both services are otherwise identify-scoped by this role's own
+            # trust condition (only these four workflow files can reach this policy at all).
+            Action:
+              - cloudfront:*
+              - acm:*
+            Resource: "*"
+          - Sid: Route53
+            Effect: Allow
+            Action:
+              - route53:ChangeResourceRecordSets
+              - route53:GetChange
+              - route53:ListResourceRecordSets
+              # Added 2026-09-03 during bring-up: Terraform's aws_route53_zone data source
+              # reads the zone itself and its tags, not just its records. Both stay scoped to
+              # this one hosted zone.
+              - route53:GetHostedZone
+              - route53:ListTagsForResource
+            Resource:
+              - "arn:aws:route53:::hostedzone/Z03440533GE3SURWYAZRT"
+              - "arn:aws:route53:::change/*"
+          # route53:ListHostedZones cannot be resource-scoped - it is a list operation over the
+          # account, so AWS only accepts "*". Added 2026-09-03 after the first successful-OIDC
+          # proving run failed on it: Terraform's aws_route53_zone data source calls it to
+          # resolve the zone by name before touching any record. Read-only.
+          - Sid: Route53List
+            Effect: Allow
+            Action:
+              - route53:ListHostedZones
+              - route53:ListHostedZonesByName
+            Resource: "*"
+          # Terraform reads the SES domain identity's verification state on every apply that
+          # touches the email pipeline's DNS records. Read-only, and there is no narrower
+          # resource form for these two - SES identity verification calls take "*".
+          - Sid: SesRead
+            Effect: Allow
+            Action:
+              - ses:GetIdentityVerificationAttributes
+              - ses:GetIdentityDkimAttributes
+            Resource: "*"
 
-              # Decision 11's two IAM additions. Both are new with the consolidated logging work;
-              # the role previously had no logs permissions at all.
-              #
-              # 1. Managing the components' own log groups. Lambda and AppSync auto-create these on
-              #    first use, unmanaged and with never-expire retention - Decision 11 brings them
-              #    under Terraform so they are tagged and capped at 120 days. Scoped to the two
-              #    prefixes those services actually use for this project.
-              - Sid: ComponentLogGroups
-                Effect: Allow
-                Action:
-                  - logs:CreateLogGroup
-                  - logs:DeleteLogGroup
-                  - logs:PutRetentionPolicy
-                  - logs:DeleteRetentionPolicy
-                  - logs:TagResource
-                  - logs:UntagResource
-                  - logs:ListTagsForResource
-                  - logs:TagLogGroup
-                  - logs:UntagLogGroup
-                  - logs:ListTagsLogGroup
-                Resource:
-                  - !Sub "arn:aws:logs:${pRegion}:${pAccountId}:log-group:/aws/lambda/*-mootmaker-*"
-                  - !Sub "arn:aws:logs:${pRegion}:${pAccountId}:log-group:/aws/lambda/*-mootmaker-*:*"
-                  - !Sub "arn:aws:logs:${pRegion}:${pAccountId}:log-group:/aws/appsync/apis/*"
-                  - !Sub "arn:aws:logs:${pRegion}:${pAccountId}:log-group:/aws/appsync/apis/*:*"
 
-              # 2. Shipping each stage's structured output to the release pipeline's own group.
-              #    Write-only and confined to that one group - the pipeline publishes its record,
-              #    it does not read anyone else's logs.
-              - Sid: ReleasePipelineLogShipping
-                Effect: Allow
-                Action:
-                  - logs:CreateLogStream
-                  - logs:PutLogEvents
-                  - logs:DescribeLogStreams
-                Resource:
-                  - !Sub "arn:aws:logs:${pRegion}:${pAccountId}:log-group:/mootmaker/release-pipeline"
-                  - !Sub "arn:aws:logs:${pRegion}:${pAccountId}:log-group:/mootmaker/release-pipeline:*"
+  # mootmaker-api: AppSync + Cognito + DynamoDB + the Lambdas behind AppSync's resolvers and
+  # database-reset/database-repair, plus their IAM exec roles.
+  # mootmaker-api's avatars bucket (avatars.tf: <environment>-mootmaker-avatars-<account-id>),
+  # added with API-owned avatar uploads (mootmaker-api's person-avatar-upload-refactor). Same
+  # shape as the webapp's SiteBucket above, plus the lifecycle rule that expires abandoned
+  # uploads. Its CloudFront distribution, certificate and DNS records are already covered by
+  # WebappHosting's CloudFrontAndAcm and Route 53 statements. Added 2026-10-01, after the
+  # first release carrying avatars failed in build-api with AccessDenied on s3:CreateBucket.
+  DeployApiAvatarsBucketPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: mootmaker-deploy-ApiAvatarsBucket
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: AvatarsBucket
+            Effect: Allow
+            Action:
+              - s3:CreateBucket
+              - s3:DeleteBucket
+              - s3:GetBucketPolicy
+              - s3:PutBucketPolicy
+              - s3:DeleteBucketPolicy
+              - s3:GetBucketPublicAccessBlock
+              - s3:PutBucketPublicAccessBlock
+              - s3:GetLifecycleConfiguration
+              - s3:PutLifecycleConfiguration
+              - s3:GetObject
+              - s3:PutObject
+              - s3:DeleteObject
+              - s3:ListBucket
+              # Read-only drift detection on refresh, and version enumeration so destroy can
+              # empty the bucket - the same reasons as SiteBucket's identical entries.
+              - s3:GetBucketAcl
+              - s3:GetBucketCORS
+              - s3:GetBucketLocation
+              - s3:GetBucketLogging
+              - s3:GetBucketNotification
+              - s3:GetBucketObjectLockConfiguration
+              - s3:GetBucketOwnershipControls
+              - s3:GetBucketRequestPayment
+              - s3:GetBucketTagging
+              - s3:GetBucketVersioning
+              - s3:GetBucketWebsite
+              - s3:GetAccelerateConfiguration
+              - s3:GetEncryptionConfiguration
+              - s3:GetReplicationConfiguration
+              - s3:ListBucketVersions
+              - s3:DeleteObjectVersion
+            Resource:
+              - !Sub "arn:aws:s3:::*-mootmaker-avatars-${pAccountId}"
+              - !Sub "arn:aws:s3:::*-mootmaker-avatars-${pAccountId}/*"
 
-              # logs:DescribeLogGroups is a list operation over the account and AWS accepts no
-              # narrower resource form - the same shape as ssm:DescribeParameters above. Terraform
-              # calls it on every refresh of a log group, so it is needed for destroy as well as
-              # apply. Read-only.
-              - Sid: LogGroupDiscovery
-                Effect: Allow
-                Action:
-                  - logs:DescribeLogGroups
-                Resource: "*"
 
-              # The scheduled sweep asks "does a function still exist for this log group?", which
-              # means listing every function in the account - lambda:ListFunctions takes no
-              # narrower resource form either, same as the two above. Read-only, and the sweep
-              # never deletes a group whose function it found.
-              #
-              # Added after the sweep's first CI run failed on it. It had been verified locally
-              # first, but under an SSO admin session rather than this role - so the gap only
-              # appeared where it mattered. That is the second time in this build-out that testing
-              # under different credentials than production hid a permissions gap.
-              - Sid: FunctionDiscovery
-                Effect: Allow
-                Action:
-                  - lambda:ListFunctions
-                Resource: "*"
+  DeployApiCorePolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: mootmaker-deploy-ApiCore
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: AppSyncAndCognito
+            Effect: Allow
+            # Same reasoning as CloudFront/ACM above: AppSync API IDs and Cognito user/identity
+            # pool IDs are assigned at creation, so this can't be scoped narrower than "*" for
+            # the create path. Left broad rather than half-scoped in a way that looks tighter
+            # than it actually is.
+            Action:
+              - appsync:*
+              - cognito-idp:*
+            Resource: "*"
+          - Sid: DynamoDbTables
+            Effect: Allow
+            Action:
+              - dynamodb:CreateTable
+              - dynamodb:DeleteTable
+              - dynamodb:DescribeTable
+              - dynamodb:UpdateTable
+              - dynamodb:TagResource
+              - dynamodb:UntagResource
+              - dynamodb:ListTagsOfResource
+              - dynamodb:PutItem
+              - dynamodb:GetItem
+              - dynamodb:UpdateItem
+              - dynamodb:DeleteItem
+              # Terraform refreshes these sub-resources on every plan and destroy, not just on
+              # create. Missing them fails the refresh, which breaks `terraform destroy` as
+              # surely as it breaks apply - that is how the first deploying run stranded four
+              # tables. Added 2026-09-03 during bring-up; all read-only.
+              - dynamodb:DescribeContinuousBackups
+              - dynamodb:DescribeTimeToLive
+            Resource:
+              - !Sub "arn:aws:dynamodb:${pRegion}:${pAccountId}:table/*-mootmaker-*"
+          - Sid: LambdaFunctions
+            Effect: Allow
+            Action:
+              - lambda:CreateFunction
+              - lambda:DeleteFunction
+              - lambda:GetFunction
+              - lambda:UpdateFunctionCode
+              - lambda:UpdateFunctionConfiguration
+              - lambda:CreateAlias
+              - lambda:DeleteAlias
+              - lambda:UpdateAlias
+              - lambda:GetAlias
+              - lambda:AddPermission
+              - lambda:RemovePermission
+              - lambda:GetPolicy
+              - lambda:TagResource
+              - lambda:UntagResource
+              - lambda:ListTags
+              # Terraform reads these on every refresh of an aws_lambda_function, so they are
+              # needed for destroy as much as for apply. Read-only, still scoped to
+              # *-mootmaker-* functions. Added 2026-09-03 during bring-up.
+              # Needed only on the UPDATE path, which is why no ephemeral proving run caught
+              # it. Creating a function with publish = true publishes version 1 as part of
+              # CreateFunction; updating an existing one requires a separate PublishVersion
+              # call. Ephemeral environments are always created from nothing, so they exercise
+              # only the create path - test and production persist and are updated on every
+              # release, so they hit this every time. Added 2026-09-03 after it failed the
+              # second deploy to test.
+              - lambda:PublishVersion
+              - lambda:ListVersionsByFunction
+              - lambda:GetFunctionConfiguration
+              - lambda:GetFunctionCodeSigningConfig
+              - lambda:GetFunctionConcurrency
+              # Terraform's aws_lambda_function_recursion_config, this is not - it's
+              # reserved_concurrent_executions on aws_lambda_function itself, which Terraform
+              # manages via these two calls (set a value / unset back to unreserved). Missing
+              # this failed the first deploy of mootmaker-demo-data#27's reserved-concurrency-1
+              # change with an AccessDeniedException, after every ephemeral proving run passed -
+              # `terraform plan` doesn't call this API, only `apply` does, and no ephemeral
+              # environment exercises this Lambda's concurrency setting. Added 2026-09-21.
+              - lambda:PutFunctionConcurrency
+              - lambda:DeleteFunctionConcurrency
+              - lambda:GetRuntimeManagementConfig
+              # Not a Terraform action: the acceptance suites invoke database-reset directly
+              # with AWS credentials to reset an environment before each test (see
+              # mootmaker-api's README, "Authentication in end-to-end tests"), and
+              # mootmaker-demo-data's seed step invokes its own Lambda the same way. Without
+              # this, deploy succeeds and acceptance fails. Still scoped to *-mootmaker-*
+              # functions, so it cannot reach anything outside this project. Added 2026-09-03
+              # during bring-up.
+              - lambda:InvokeFunction
+            Resource:
+              - !Sub "arn:aws:lambda:${pRegion}:${pAccountId}:function:*-mootmaker-*"
+          - Sid: LambdaExecRoles
+            Effect: Allow
+            Action:
+              - iam:CreateRole
+              - iam:DeleteRole
+              - iam:GetRole
+              - iam:TagRole
+              - iam:UntagRole
+              - iam:PutRolePolicy
+              - iam:DeleteRolePolicy
+              - iam:GetRolePolicy
+              - iam:AttachRolePolicy
+              - iam:DetachRolePolicy
+              - iam:PassRole
+              # Terraform lists a role's inline and attached policies on every refresh, so
+              # these are needed for destroy as much as for apply. Read-only, and still scoped
+              # to *-mootmaker-* roles. Added 2026-09-03 during bring-up.
+              - iam:ListRolePolicies
+              - iam:ListAttachedRolePolicies
+              - iam:ListRoleTags
+              - iam:ListInstanceProfilesForRole
+            Resource:
+              - !Sub "arn:aws:iam::${pAccountId}:role/*-mootmaker-*"
 
-        - PolicyName: Misc
-          PolicyDocument:
-            Version: "2012-10-17"
-            Statement:
-              - Sid: CallerIdentity
-                Effect: Allow
-                Action: sts:GetCallerIdentity
-                Resource: "*"
+
+  # mootmaker-demo-data: its Lambda + IAM exec role (already covered by ApiCore's
+  # LambdaFunctions/LambdaExecRoles statements above, same naming convention) plus its own
+  # EventBridge schedule and SSM parameters (the demo-data-credentials.tf client-credentials
+  # values it reads at deploy time).
+  DeployDemoDataPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: mootmaker-deploy-DemoData
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: EventBridgeSchedule
+            Effect: Allow
+            Action:
+              - events:PutRule
+              - events:DeleteRule
+              - events:DescribeRule
+              - events:PutTargets
+              - events:RemoveTargets
+              - events:ListTargetsByRule
+              # Terraform reads a rule's tags on every refresh, so this is needed for destroy
+              # as much as apply. Read-only, still scoped to *-mootmaker-* rules. Added
+              # 2026-09-03 after it blocked the first demo-data proving run.
+              - events:ListTagsForResource
+            Resource:
+              - !Sub "arn:aws:events:${pRegion}:${pAccountId}:rule/*-mootmaker-*"
+          - Sid: SsmParameters
+            Effect: Allow
+            Action:
+              - ssm:GetParameter
+              - ssm:GetParameters
+              - ssm:PutParameter
+              - ssm:DeleteParameter
+              - ssm:AddTagsToResource
+              - ssm:RemoveTagsFromResource
+              - ssm:ListTagsForResource
+            Resource:
+              - !Sub "arn:aws:ssm:${pRegion}:${pAccountId}:parameter/*mootmaker*"
+          # ssm:DescribeParameters is a list operation over the account and AWS rejects any
+          # resource form narrower than "*" - the denial names
+          # arn:aws:ssm:<region>:<account>:* rather than the parameter itself. Terraform calls
+          # it to read parameter metadata on every refresh, so it is needed for destroy too.
+          # Read-only, and the SCP service allowlist already permits exactly this action.
+          # Added 2026-09-03 during bring-up.
+          # mootmaker-webapp's acceptance suite reads real Cognito emails out of
+          # mootmaker-email-testing's persistent SES/SNS/SQS pipeline - see that repo's
+          # testing-strategy.md. Standing shared infrastructure, not created per environment,
+          # so this is scoped to that one queue by name rather than to a wildcard. Delete is
+          # included because the suite consumes the messages it reads; leaving them would make
+          # every later run pick up a stale code. Added 2026-09-03 during bring-up.
+          - Sid: EmailTestingQueue
+            Effect: Allow
+            Action:
+              - sqs:ReceiveMessage
+              - sqs:DeleteMessage
+              - sqs:GetQueueAttributes
+              - sqs:GetQueueUrl
+            Resource:
+              - !Sub "arn:aws:sqs:${pRegion}:${pAccountId}:mootmaker-e2e-inbound-email"
+          - Sid: SsmDescribeParameters
+            Effect: Allow
+            Action:
+              - ssm:DescribeParameters
+            Resource: "*"
+
+          # Decision 11's two IAM additions. Both are new with the consolidated logging work;
+          # the role previously had no logs permissions at all.
+          #
+          # 1. Managing the components' own log groups. Lambda and AppSync auto-create these on
+          #    first use, unmanaged and with never-expire retention - Decision 11 brings them
+          #    under Terraform so they are tagged and capped at 120 days. Scoped to the two
+          #    prefixes those services actually use for this project.
+          - Sid: ComponentLogGroups
+            Effect: Allow
+            Action:
+              - logs:CreateLogGroup
+              - logs:DeleteLogGroup
+              - logs:PutRetentionPolicy
+              - logs:DeleteRetentionPolicy
+              - logs:TagResource
+              - logs:UntagResource
+              - logs:ListTagsForResource
+              - logs:TagLogGroup
+              - logs:UntagLogGroup
+              - logs:ListTagsLogGroup
+            Resource:
+              - !Sub "arn:aws:logs:${pRegion}:${pAccountId}:log-group:/aws/lambda/*-mootmaker-*"
+              - !Sub "arn:aws:logs:${pRegion}:${pAccountId}:log-group:/aws/lambda/*-mootmaker-*:*"
+              - !Sub "arn:aws:logs:${pRegion}:${pAccountId}:log-group:/aws/appsync/apis/*"
+              - !Sub "arn:aws:logs:${pRegion}:${pAccountId}:log-group:/aws/appsync/apis/*:*"
+
+          # 2. Shipping each stage's structured output to the release pipeline's own group.
+          #    Write-only and confined to that one group - the pipeline publishes its record,
+          #    it does not read anyone else's logs.
+          - Sid: ReleasePipelineLogShipping
+            Effect: Allow
+            Action:
+              - logs:CreateLogStream
+              - logs:PutLogEvents
+              - logs:DescribeLogStreams
+            Resource:
+              - !Sub "arn:aws:logs:${pRegion}:${pAccountId}:log-group:/mootmaker/release-pipeline"
+              - !Sub "arn:aws:logs:${pRegion}:${pAccountId}:log-group:/mootmaker/release-pipeline:*"
+
+          # logs:DescribeLogGroups is a list operation over the account and AWS accepts no
+          # narrower resource form - the same shape as ssm:DescribeParameters above. Terraform
+          # calls it on every refresh of a log group, so it is needed for destroy as well as
+          # apply. Read-only.
+          - Sid: LogGroupDiscovery
+            Effect: Allow
+            Action:
+              - logs:DescribeLogGroups
+            Resource: "*"
+
+          # The scheduled sweep asks "does a function still exist for this log group?", which
+          # means listing every function in the account - lambda:ListFunctions takes no
+          # narrower resource form either, same as the two above. Read-only, and the sweep
+          # never deletes a group whose function it found.
+          #
+          # Added after the sweep's first CI run failed on it. It had been verified locally
+          # first, but under an SSO admin session rather than this role - so the gap only
+          # appeared where it mattered. That is the second time in this build-out that testing
+          # under different credentials than production hid a permissions gap.
+          - Sid: FunctionDiscovery
+            Effect: Allow
+            Action:
+              - lambda:ListFunctions
+            Resource: "*"
+
+
+  DeployMiscPolicy:
+    Type: AWS::IAM::ManagedPolicy
+    Properties:
+      ManagedPolicyName: mootmaker-deploy-Misc
+      PolicyDocument:
+        Version: "2012-10-17"
+        Statement:
+          - Sid: CallerIdentity
+            Effect: Allow
+            Action: sts:GetCallerIdentity
+            Resource: "*"
 
 Outputs:
   DeployRoleArn:
     Description: Paste into each component repo's release-build.yml (and mootmaker-release's release.yml) as the role-to-assume input for aws-actions/configure-aws-credentials.
     Value: !GetAtt GitHubActionsDeployRole.Arn
+  EphemeralRoleArn:
+    Description: role-to-assume for pull-request workflows and mootmaker-ephemeral-envs' ephemeral-env.yml. Never for anything that deploys test or production.
+    Value: !GetAtt GitHubActionsEphemeralRole.Arn
   OidcProviderArn:
     Value: !GetAtt GitHubOidcProvider.Arn
