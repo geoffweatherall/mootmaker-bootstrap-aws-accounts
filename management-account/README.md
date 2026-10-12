@@ -52,18 +52,19 @@ Two SCPs, both attached to the account IDs listed in `pTargetAccountIds`:
   this is what blocks EC2 and everything else you don't use, without
   having to enumerate what to block.
 
-Defaults are scoped to exactly what the mootmaker-* projects deployed into
-member accounts currently use: `s3, dynamodb, lambda, appsync, cognito-idp,
-cloudfront, iam, sts, logs, cloudwatch` (the last for viewing metrics/alarms
-in the workspace account, e.g. CloudWatch Logs Insights / metric dashboards),
-`cloudformation` (stack-based deploys), `route53, acm` (custom-domain setup
-for mootmaker-webapp/mootmaker-api/mootmaker-domain), plus `events`
-(EventBridge - schedules mootmaker-demo-data's daily Lambda
-trigger), `ses, sns, sqs` (mootmaker-email-testing's real-email testing
-pipeline: SES receiving, SNS, SQS), plus `budgets, ce, support,
-trustedadvisor, health` for account hygiene and a couple of
-`organizations:Describe*/List*` calls for basic self-service visibility from
-the member account.
+The defaults allow exactly what the project uses:
+
+| Services | For |
+|---|---|
+| `s3`, `dynamodb`, `lambda`, `appsync`, `cognito-idp`, `cloudfront`, `iam`, `sts` | The application and its deploys |
+| `route53`, `acm` | Hostnames and certificates |
+| `logs`, `cloudwatch`, `events` | Logs, metrics, and scheduled Lambdas |
+| `ses`, `sns`, `sqs` | Sending account email, and the real-email test pipeline |
+| `ssm` parameter actions and `kms:Encrypt`/`Decrypt`/`DescribeKey` only | Published configuration and SecureString secrets. Not `ssm:*`, which would include Session Manager and Run Command |
+| `cloudformation` | The stacks in this repository |
+| `budgets`, `ce`, `support`, `trustedadvisor`, `health`, `organizations:Describe*`/`List*` | Billing and account hygiene |
+
+`identity-center.yaml` repeats the same list for the permission set; keep the two in step.
 
 **Important:** none of this applies to the management account itself - SCPs
 never restrict the account they're managed from, only member accounts.
@@ -182,11 +183,9 @@ stack.
 
 ### Do I still need a break-glass IAM role?
 
-No, by design here - there is no IAM-user-based break-glass role in this
-setup (an earlier version of this project had one, `GuardrailAdminRole`;
-it was deliberately removed once Identity Center was confirmed working,
-along with the last remaining IAM user). The account's only standing
-access paths are Identity Center and the AWS account root user. If
+No, by design here - there is no IAM-user-based break-glass role and no IAM
+user. The account's only standing access paths are Identity Center and the
+AWS account root user. If
 Identity Center is ever unreachable, root login (console) is the fallback
 - there is no faster middle-ground path, and that's an accepted
 trade-off in exchange for one fewer standing identity in the account.
@@ -283,10 +282,9 @@ aws s3 ls --region eu-west-1
 aws s3api list-buckets --region us-east-1
 ```
 
-Also worth doing once: a full `terraform apply` / `terraform destroy`
-cycle against the `test` environment in mootmaker-api and
-mootmaker-webapp, to confirm nothing legitimate got caught by the
-service allow-list before you rely on this for real.
+After changing either list, create and tear down an ephemeral environment
+(`create-ephemeral-env.sh --with-demo-data`) to confirm nothing legitimate is
+caught by it.
 
 ## Covering more member accounts, or adjusting the lists later
 

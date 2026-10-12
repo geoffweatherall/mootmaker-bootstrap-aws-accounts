@@ -22,12 +22,9 @@ See the root README's ["Configuring AWS access on a new
 machine"](../README.md#configuring-aws-access-on-a-new-machine) section for
 how to sign in, and
 [../management-account/README.md](../management-account/README.md#identity-centeryaml)
-for how that's set up. There is deliberately no IAM-user-based break-glass
+for how that's set up. There is deliberately no IAM user or break-glass
 role in this account either - the AWS account root user is the sole
-fallback if Identity Center is ever unreachable. An earlier version of this
-project had one (`admin-guardrail.yaml`, an MFA-gated assumable role); it
-was removed once Identity Center was confirmed working, along with the
-last IAM user in this account.
+fallback if Identity Center is ever unreachable.
 
 ## Deploying
 
@@ -102,19 +99,19 @@ Claude session.
 
 **Trust is by `sub` only: repository and ref, not workflow file.** AWS supports only `sub` and `aud`
 as OIDC condition keys, so any workflow in a trusted repository at a matching ref can assume a
-role. The template's header explains this, and how it was found (issue #9). Repositories are pinned
-by their immutable numeric IDs.
+role. The template's header explains this (issue #9). Repositories are pinned by their immutable
+numeric IDs. `main` in mootmaker-release and mootmaker-ephemeral-envs is not yet branch-protected,
+although the release role trusts it (mootmaker-release#91).
 
 **Both roles share the same Allow policies**, six managed policies named `mootmaker-deploy-*`, so
 a permission added for a component reaches both at once. They are scoped by resource-name pattern
 (`*-mootmaker-*`) everywhere AWS's IAM model allows it (S3, DynamoDB, Lambda, the Lambda exec
 roles, EventBridge, SSM, Route 53 - scoped to the actual `mootmaker.com` hosted zone). AppSync,
 Cognito, ACM, and CloudFront assign IDs only at creation time, so their create actions are
-`Resource: "*"` - not an oversight, just what those services' ARN model allows. Built by grepping
-`mootmaker-api`/`mootmaker-webapp`/`mootmaker-demo-data`'s `deploy/terraform/*.tf` directly for
-every `resource "aws_*"` block, not guessed from memory. **Expect this to need iteration** once
-real workflow runs surface a missing permission - see the design doc's own Risks table for why
-that's the accepted cost of starting narrow.
+`Resource: "*"` - not an oversight, just what those services' ARN model allows. The policies cover
+the resource types the components' `deploy/terraform/*.tf` declare. A new resource type in a
+component shows up as `AccessDenied` in its first release or ephemeral deploy; add the permission to
+the matching `mootmaker-deploy-*` policy here.
 
 **The ephemeral role adds explicit denials for `test` and `production`**: their Terraform state,
 everything named `test-mootmaker-*` or `production-mootmaker-*`, their `/mootmaker/<env>/` SSM
