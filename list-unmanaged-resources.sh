@@ -403,10 +403,10 @@ if [[ -n "${role_name}" ]]; then
   not_resource_bearing='^(sts|ce|health|support|trustedadvisor|organizations|servicequotas|cloudformation|budgets)$'
 
   # Services accepted for THIS check specifically, listed separately from known_uncheckable rather
-  # than inferred from it. Inferring was a bug: testing "does any accepted TYPE start with
-  # aws_<service>" made one accepted type speak for its whole service, so accepting
-  # aws_cloudwatch_query_definition silently accepted CloudWatch alarms too - a resource that can be
-  # created by hand, costs money, and would never have been reported. A service is only accepted
+  # than inferred from it. Inferring ("does any accepted TYPE start with aws_<service>") would let
+  # one accepted type speak for its whole service: accepting aws_cloudwatch_query_definition would
+  # silently accept CloudWatch alarms too - a resource that can be created by hand, costs money,
+  # and would never be reported. A service is only accepted
   # here if someone wrote it here.
   accepted_services='^(ses)$'
 

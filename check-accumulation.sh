@@ -2,10 +2,9 @@
 # Checks that nothing in this account accumulates without a bound (mootmaker#77).
 #
 # WHY THIS EXISTS. principles.md states it as a rule: under steady usage the bill should be flat,
-# and anything that grows with TIME rather than with use is a defect. Nothing enforced that. Each
-# known breach was found by someone happening to look - orphaned AppSync log groups (#71), Lambda
-# versions piling up, meeting history nobody deleted - and a fix for one does not stop the next.
-# This is the check that would have caught each of them without anyone remembering to look.
+# and anything that grows with TIME rather than with use is a defect. Without a check, each breach
+# - orphaned AppSync log groups (#71), Lambda versions piling up, meeting history nobody deleted -
+# is found only when someone happens to look, and a fix for one does not stop the next.
 #
 # WHAT IT CHECKS. Each is a single read of state that already exists, so none needs a paid alarm
 # (CloudWatch alarms are a standing US$0.10/month per metric - the shape this check exists to
