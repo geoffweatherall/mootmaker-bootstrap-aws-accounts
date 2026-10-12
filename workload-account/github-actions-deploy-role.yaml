@@ -5,7 +5,7 @@
 #
 # A second, narrower role lives here too: mootmaker-ephemeral-github-actions-deploy, for
 # pull-request workflows and for ephemeral environments requested by cloud Claude sessions
-# (mootmaker/designs/android-app.md Q7). It shares the release role's Allow policies, which are
+# (mootmaker/designs/archive/android-app.md Q7). It shares the release role's Allow policies, which are
 # managed policies for exactly that reason, and adds explicit denials for test and production. See
 # its own comment, GitHubActionsEphemeralRole below, including what those denials cannot cover.
 #
@@ -41,7 +41,7 @@ AWSTemplateFormatVersion: '2010-09-09'
 Description: >-
   GitHub Actions OIDC provider, the deploy role for mootmaker's release pipeline (see
   mootmaker/designs/archive/ci-cd-pipeline.md), and a narrower ephemeral-only role for pull
-  requests and cloud-session environments (mootmaker/designs/android-app.md Q7). Deploy in the workload account. Requires
+  requests and cloud-session environments (mootmaker/designs/archive/android-app.md Q7). Deploy in the workload account. Requires
   CAPABILITY_NAMED_IAM. See this file's own header comment for the full reasoning.
 
 Parameters:

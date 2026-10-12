@@ -98,7 +98,7 @@ Claude session.
 | Role | Trusted `sub` | Used by |
 |---|---|---|
 | `mootmaker-release-github-actions-deploy` | component repos at `refs/tags/v*`; mootmaker-release and mootmaker-ephemeral-envs at `refs/heads/main` | releases (`test`, `production`) and the daily sweep |
-| `mootmaker-ephemeral-github-actions-deploy` | `pull_request` in mootmaker-android and mootmaker-webapp; mootmaker-ephemeral-envs at `refs/heads/main` | pull-request acceptance runs and `ephemeral-env.yml`, which is how cloud sessions get an environment ([android-app.md](https://github.com/geoffweatherall/mootmaker/blob/main/designs/android-app.md) Q7) |
+| `mootmaker-ephemeral-github-actions-deploy` | `pull_request` in mootmaker-android and mootmaker-webapp; mootmaker-ephemeral-envs at `refs/heads/main` | pull-request acceptance runs and `ephemeral-env.yml`, which is how cloud sessions get an environment ([android-app.md](https://github.com/geoffweatherall/mootmaker/blob/main/designs/archive/android-app.md) Q7) |
 
 **Trust is by `sub` only: repository and ref, not workflow file.** AWS supports only `sub` and `aud`
 as OIDC condition keys, so any workflow in a trusted repository at a matching ref can assume a
