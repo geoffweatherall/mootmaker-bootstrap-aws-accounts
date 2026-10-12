@@ -22,8 +22,9 @@
 # repository pinning is by immutable numeric ID, which is real and survives a rename.
 #
 # The compensating controls are therefore the ref patterns (components only at refs/tags/v*, the
-# orchestrator and the sweep only at refs/heads/main), not workflow-file identity. Branch protection
-# on those repositories' main would complete them and is not yet in place (mootmaker-release#91).
+# orchestrator and the sweep only at refs/heads/main), not workflow-file identity, plus branch
+# protection on mootmaker-release's and mootmaker-ephemeral-envs' main: a pull request is required,
+# for admins too, so nothing reaches that ref by a direct push (mootmaker-release#91).
 # See mootmaker/designs/archive/ci-cd-pipeline.md Decision 3 and OQ-4/OQ-3 (a
 # fine-grained PAT, not this role, is what's exposed to a plain PR).
 #
