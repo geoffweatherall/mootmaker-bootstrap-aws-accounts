@@ -100,8 +100,8 @@ Claude session.
 **Trust is by `sub` only: repository and ref, not workflow file.** AWS supports only `sub` and `aud`
 as OIDC condition keys, so any workflow in a trusted repository at a matching ref can assume a
 role. The template's header explains this (issue #9). Repositories are pinned by their immutable
-numeric IDs. `main` in mootmaker-release and mootmaker-ephemeral-envs is not yet branch-protected,
-although the release role trusts it (mootmaker-release#91).
+numeric IDs. Because the release role trusts `main` in mootmaker-release and mootmaker-ephemeral-envs,
+both protect it: a pull request is required, for admins too (mootmaker-release#91).
 
 **Both roles share the same Allow policies**, six managed policies named `mootmaker-deploy-*`, so
 a permission added for a component reaches both at once. They are scoped by resource-name pattern
